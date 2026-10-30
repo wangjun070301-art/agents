@@ -54,6 +54,9 @@ export class AdapterRegistry {
   private readonly adapters = new Map<string, WorkflowAdapter>();
 
   register(adapter: WorkflowAdapter): this {
+    if (typeof adapter.id !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(adapter.id)) {
+      throw new Error(`Adapter id must match ^[a-z0-9][a-z0-9._-]{0,63}$: ${JSON.stringify(adapter.id)}`);
+    }
     if (this.adapters.has(adapter.id)) {
       throw new Error(`Adapter id already registered: ${adapter.id}`);
     }
@@ -75,13 +78,70 @@ export class AdapterRegistry {
     return [...this.adapters.values()].map(({ id, label }) => ({ id, label }));
   }
 
-  async checkAll(): Promise<CapabilityReport[]> {
+  /** Every registered adapter is asked, in parallel, with its own deadline. */
+  async checkAll(timeoutMs = 30_000, signal?: AbortSignal): Promise<CapabilityReport[]> {
+    const deadline = (id: string, promise: Promise<CapabilityReport>): Promise<CapabilityReport> =>
+      new Promise<CapabilityReport>((resolve) => {
+        // unref so a one-shot caller is not held alive by the timer, and clear
+        // it as soon as the adapter answers so timers do not accumulate.
+        const timer = setTimeout(
+          () =>
+            resolve({
+              adapter_id: id,
+              version: "unknown",
+              available: false,
+              models: [],
+              working_directories: [],
+              can_run_tests: false,
+              can_resume: false,
+              detail: `capabilityCheck did not answer within ${timeoutMs}ms`,
+            }),
+          timeoutMs,
+        );
+        // Deliberately referenced: a never-resolving adapter must still be able
+        // to time out even when nothing else keeps the process alive.
+        promise.then(
+          (report) => {
+            clearTimeout(timer);
+            resolve(report);
+          },
+          // Settle the race so a rejection cannot leave the deadline hanging.
+          (error) => {
+            clearTimeout(timer);
+            resolve({
+              adapter_id: id,
+              version: "unknown",
+              available: false,
+              models: [],
+              working_directories: [],
+              can_run_tests: false,
+              can_resume: false,
+              detail: error instanceof Error ? error.message : String(error),
+            });
+          },
+        );
+      });
+
     const reports: CapabilityReport[] = [];
-    for (const adapter of this.adapters.values()) {
+    const tasks = [...this.adapters.values()].map(async (adapter) => {
+      if (signal?.aborted) {
+        return {
+          adapter_id: adapter.id,
+          version: "unknown",
+          available: false,
+          models: [],
+          working_directories: [],
+          can_run_tests: false,
+          can_resume: false,
+          detail: "aborted before capability check",
+        } satisfies CapabilityReport;
+      }
       try {
-        reports.push(await adapter.capabilityCheck());
+        const report = await deadline(adapter.id, adapter.capabilityCheck());
+        // Never let an adapter attribute its report to a different id.
+        return { ...report, adapter_id: adapter.id };
       } catch (error) {
-        reports.push({
+        return {
           adapter_id: adapter.id,
           version: "unknown",
           available: false,
@@ -90,6 +150,27 @@ export class AdapterRegistry {
           can_run_tests: false,
           can_resume: false,
           detail: error instanceof Error ? error.message : String(error),
+        } satisfies CapabilityReport;
+      }
+    });
+
+    // Every task settles to a report, so a rejected adapter can never vanish
+    // from the list and be mistaken for one that was never registered.
+    const results = await Promise.allSettled(tasks);
+    for (const result of results) {
+      if (result.status === "fulfilled") reports.push(result.value);
+    }
+    for (const id of this.adapters.keys()) {
+      if (!reports.some((r) => r.adapter_id === id)) {
+        reports.push({
+          adapter_id: id,
+          version: "unknown",
+          available: false,
+          models: [],
+          working_directories: [],
+          can_run_tests: false,
+          can_resume: false,
+          detail: "capability check produced no report",
         });
       }
     }
