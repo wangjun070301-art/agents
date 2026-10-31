@@ -244,3 +244,94 @@ test("a crash is refused even when a result file exists", async () => {
     (error: unknown) => error instanceof CodexAdapterError && error.kind === "spawn-failed",
   );
 });
+
+/**
+ * Signal variety. The adapter treats killedBy as opaque, so any signal name
+ * should produce the same crash classification. SIGTERM is the common one on
+ * Unix and also what `taskkill` sends by default on Windows.
+ */
+test("SIGTERM is classified as a crash just like SIGKILL", async () => {
+  const home = scratchHome();
+  const adapter = new CodexAdapter({
+    codexPath: process.execPath,
+    codexHome: home,
+    model: "m",
+    observeWorktree: false,
+    spawn: async () => ({
+      code: -1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      killedBy: "SIGTERM",
+    }),
+  });
+  await assert.rejects(
+    () => adapter.execute(envelope),
+    (error: unknown) =>
+      error instanceof CodexAdapterError &&
+      error.kind === "spawn-failed" &&
+      /terminated by SIGTERM/.test(error.message),
+  );
+});
+
+test("a signal name the adapter has never seen is still treated as a crash", async () => {
+  const home = scratchHome();
+  const adapter = new CodexAdapter({
+    codexPath: process.execPath,
+    codexHome: home,
+    model: "m",
+    observeWorktree: false,
+    spawn: async () => ({
+      code: -1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      killedBy: "SIGSEGV",
+    }),
+  });
+  await assert.rejects(
+    () => adapter.execute(envelope),
+    (error: unknown) =>
+      error instanceof CodexAdapterError && error.kind === "spawn-failed",
+    "an unknown signal must not fall through to result parsing",
+  );
+});
+
+/**
+ * A real SIGTERM on the current platform. On Windows child.kill("SIGTERM")
+ * maps to TerminateProcess, and the reported signal name may differ; the
+ * assertion therefore checks the classification, not the exact string.
+ */
+test("a real SIGTERM produces a crash classification", async () => {
+  const home = scratchHome();
+  const { command, args } = sleepingCommand();
+  let reported: string | undefined;
+  const adapter = new CodexAdapter({
+    codexPath: process.execPath,
+    codexHome: home,
+    model: "m",
+    observeWorktree: false,
+    spawn: (cmd, _spawnArgs, options) =>
+      new Promise((resolve) => {
+        const child = spawn(command, args, { cwd: options.cwd, stdio: "ignore" });
+        setTimeout(() => child.kill("SIGTERM"), 300);
+        child.on("close", (code, signal) => {
+          reported = signal ?? undefined;
+          resolve({
+            code: code ?? -1,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            ...(signal ? { killedBy: signal } : {}),
+          });
+        });
+      }),
+  });
+  await assert.rejects(
+    () => adapter.execute(envelope),
+    (error: unknown) => error instanceof CodexAdapterError && error.kind === "spawn-failed",
+  );
+  // Document what the platform actually reported, without asserting a specific
+  // string: Windows and Unix name the same event differently.
+  assert.equal(typeof reported === "string" || reported === undefined, true);
+});

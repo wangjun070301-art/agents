@@ -100,6 +100,12 @@ export class CodexAdapterError extends Error {
       | "result-missing"
       | "result-invalid",
     message: string,
+    /**
+     * Whether re-running the task could plausibly help. A crash is transient
+     * (an external kill, an OOM sweep); a timeout means the budget was
+     * exhausted and will be again; a cancel was a decision, not a fault.
+     */
+    readonly retryable = false,
   ) {
     super(message);
     this.name = "CodexAdapterError";
@@ -618,6 +624,8 @@ export class CodexAdapter implements WorkflowAdapter {
       throw new CodexAdapterError(
         "spawn-failed",
         `codex was terminated by ${outcome.killedBy}; stderr tail: ${outcome.stderr.slice(-800)}`,
+        // A signal kill is an external event: re-running may well succeed.
+        true,
       );
     }
 

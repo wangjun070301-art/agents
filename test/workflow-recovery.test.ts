@@ -7,6 +7,7 @@ import { Pipeline } from "../src/workflow/pipeline.js";
 import { Scheduler } from "../src/workflow/scheduler.js";
 import { requirementsSchema, taskEnvelopeSchema, taskResultSchema } from "../src/workflow/contracts.js";
 import type { CapabilityReport, EvidenceBundle, WorkflowAdapter } from "../src/workflow/adapters.js";
+import { CodexAdapterError } from "../src/workflow/adapters/codex.js";
 
 /**
  * P9 item 3: failure recovery.
@@ -181,4 +182,87 @@ test("a persisted failure survives a restart of the scheduler object", async () 
   assert.match(String(parsed.detail), /crashed/);
   assert.equal(parsed.taskId, "T-1");
   fs.rmSync(stateDir, { recursive: true, force: true });
+});
+
+/**
+ * Retry policy: a transient fault is worth repeating, a policy outcome is not.
+ * The adapter declares which is which on its error; the scheduler respects it.
+ */
+test("a retryable adapter error is retried, and a success on the second try is accepted", async () => {
+  const pipeline = new Pipeline("IMPLEMENT");
+  let calls = 0;
+  const adapter: WorkflowAdapter = {
+    ...stub("ok"),
+    execute: async () => {
+      calls += 1;
+      if (calls === 1) throw new CodexAdapterError("spawn-failed", "terminated by SIGKILL", true);
+      return good;
+    },
+    // The retry goes through resume, so it must count too.
+    resume: async () => {
+      calls += 1;
+      return good;
+    },
+  };
+  const scheduler = new Scheduler({ adapter, requirements, pipeline, maxAttempts: 2 });
+  const outcome = await scheduler.runTask(envelope);
+  assert.equal(outcome.ok, true, "the retry should succeed");
+  assert.equal(calls, 2);
+  assert.equal(outcome.attempts.length, 2, "the interrupted attempt is recorded");
+  assert.match(outcome.attempts[0]!.refusal ?? "", /retryable adapter error/);
+});
+
+test("a non-retryable adapter error fails immediately", async () => {
+  const pipeline = new Pipeline("IMPLEMENT");
+  let calls = 0;
+  const adapter: WorkflowAdapter = {
+    ...stub("ok"),
+    execute: async () => {
+      calls += 1;
+      throw new CodexAdapterError("timeout", "codex did not finish within 60s", false);
+    },
+  };
+  const scheduler = new Scheduler({ adapter, requirements, pipeline, maxAttempts: 3 });
+  const outcome = await scheduler.runTask(envelope);
+  assert.equal(outcome.ok, false);
+  assert.equal(calls, 1, "a timeout must not be retried");
+  assert.equal(outcome.failure?.reason, "adapter-error");
+  assert.equal(outcome.failure?.retryable, false);
+});
+
+test("a retryable error is still bounded by maxAttempts", async () => {
+  const pipeline = new Pipeline("IMPLEMENT");
+  let calls = 0;
+  const adapter: WorkflowAdapter = {
+    ...stub("ok"),
+    execute: async () => {
+      calls += 1;
+      throw new CodexAdapterError("spawn-failed", "terminated by SIGKILL", true);
+    },
+    resume: async () => {
+      calls += 1;
+      throw new CodexAdapterError("spawn-failed", "terminated by SIGKILL", true);
+    },
+  };
+  const scheduler = new Scheduler({ adapter, requirements, pipeline, maxAttempts: 2 });
+  const outcome = await scheduler.runTask(envelope);
+  assert.equal(outcome.ok, false);
+  assert.equal(calls, 2, "two attempts, then give up");
+  assert.equal(outcome.failure?.retryable, true, "the failure is marked transient so a caller can requeue");
+});
+
+test("an error without a retryable flag is treated as non-retryable", async () => {
+  const pipeline = new Pipeline("IMPLEMENT");
+  let calls = 0;
+  const adapter: WorkflowAdapter = {
+    ...stub("ok"),
+    execute: async () => {
+      calls += 1;
+      throw new Error("unknown failure");
+    },
+  };
+  const scheduler = new Scheduler({ adapter, requirements, pipeline, maxAttempts: 3 });
+  const outcome = await scheduler.runTask(envelope);
+  assert.equal(calls, 1, "an unclassified error must not be retried blindly");
+  assert.equal(outcome.failure?.retryable, false);
 });

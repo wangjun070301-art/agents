@@ -26,6 +26,8 @@ export interface TaskFailure {
   attempts: TaskAttempt[];
   reason: "gate-refused" | "adapter-error" | "attempts-exhausted" | "no-progress";
   detail: string;
+  /** True when the fault was transient and another attempt could help. */
+  retryable?: boolean;
 }
 
 export interface SchedulerOptions {
@@ -91,12 +93,29 @@ export class Scheduler {
           ? await this.options.adapter.resume(envelope.task_id, feedback)
           : await this.options.adapter.execute(taskEnvelope);
       } catch (error) {
+        // A retryable fault (a signal kill, an external interruption) gets
+        // another attempt while the budget lasts. A timeout or a cancel does
+        // not: repeating those would fail identically and waste the budget.
+        const retryable = isRetryable(error);
+        if (retryable && attempt < this.maxAttempts) {
+          attempts.push({
+            attempt,
+            envelope: taskEnvelope,
+            refusal: `retryable adapter error: ${error instanceof Error ? error.message : String(error)}`,
+            startedAt,
+            finishedAt: this.timestamp(),
+          });
+          this.persistAttempt(attempts.at(-1)!);
+          feedback = `the previous attempt was interrupted: ${error instanceof Error ? error.message : String(error)}`;
+          continue;
+        }
         const finishedAt = this.timestamp();
         const failure: TaskFailure = {
           taskId: envelope.task_id,
           attempts,
           reason: "adapter-error",
           detail: error instanceof Error ? error.message : String(error),
+          retryable,
         };
         this.persistFailure(failure);
         return { ok: false, attempts, failure };
@@ -313,6 +332,16 @@ function readObserved(adapter: WorkflowAdapter, taskId: string): string[] | unde
   if (typeof maybe.observedChanges !== "function") return undefined;
   const changes = maybe.observedChanges(taskId);
   return changes?.map((c) => c.path);
+}
+
+/**
+ * Does this error carry a retryable flag? Adapters declare it on their own
+ * error types; anything else is treated as non-retryable, because guessing
+ * would mean repeating a failure with no reason to expect a different result.
+ */
+function isRetryable(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  return (error as { retryable?: unknown }).retryable === true;
 }
 
 function readDiscrepancies(
