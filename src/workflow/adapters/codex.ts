@@ -59,6 +59,11 @@ export interface CodexAdapterOptions {
 
 /** What the adapter saw, kept separate from what the child claimed. */
 interface Observation {
+  /**
+   * The snapshot from the first attempt of this task. Retries are compared
+   * against this, not against the previous attempt: a retry that finds the
+   * work already done must not look like "nothing happened".
+   */
   before: WorktreeSnapshot;
   after: WorktreeSnapshot;
   changes: ObservedChange[];
@@ -500,12 +505,20 @@ export class CodexAdapter implements WorkflowAdapter {
     let before: WorktreeSnapshot | undefined;
     try {
       if (this.options.observeWorktree !== false) {
-        try {
-          before = snapshotWorktree(envelope.repo_path);
-        } catch (error) {
-          // Observation is an extra check, not a precondition. If the worktree
-          // cannot be read, the run still happens and the evidence says so.
-          before = undefined;
+        // On a retry, keep the original baseline. Comparing a retry against
+        // itself would report "no changes" for work that was already done on
+        // the first attempt.
+        const existing = this.observations.get(envelope.task_id);
+        if (existing) {
+          before = existing.before;
+        } else {
+          try {
+            before = snapshotWorktree(envelope.repo_path);
+          } catch {
+            // Observation is an extra check, not a precondition. If the worktree
+            // cannot be read, the run still happens and the evidence says so.
+            before = undefined;
+          }
         }
       }
       outcome = await this.spawn(this.options.codexPath, args, {
