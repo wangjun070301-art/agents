@@ -210,3 +210,42 @@ test("runPlan advances the stage once, after the plan, with the whole plan visib
   assert.equal(pipeline.stage, "DISPATCH");
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+/**
+ * A blocked pipeline stops the plan. Continuing would build the remaining
+ * tasks on work nobody has accepted, which is worse than stopping.
+ */
+test("runPlan stops dispatching once the pipeline is blocked", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runplan-blocked-"));
+  const pipeline = new Pipeline("IMPLEMENT");
+  const calls: string[] = [];
+  const adapter: WorkflowAdapter = {
+    ...planAdapter(root),
+    execute: async (envelope: TaskEnvelope) => {
+      calls.push(envelope.task_id);
+      // Block the pipeline from inside the first task's own failure.
+      pipeline.advance({ to: "BLOCKED", note: "simulated block" });
+      throw new Error("blocked on purpose");
+    },
+  };
+  const scheduler = new Scheduler({ adapter, requirements, pipeline, maxAttempts: 1 });
+  const outcome = await scheduler.runPlan(plan);
+
+  assert.equal(calls.length, 1, "only the first task may run");
+  assert.ok(
+    outcome.skipped.every((s) => /pipeline blocked/.test(s.because)),
+    `every remaining task must say why it was skipped: ${JSON.stringify(outcome.skipped)}`,
+  );
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("runPlan runs normally when the pipeline is not blocked", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runplan-notblocked-"));
+  const pipeline = new Pipeline("PLAN");
+  const adapter = planAdapter(root);
+  const scheduler = new Scheduler({ adapter, requirements, pipeline, maxAttempts: 1 });
+  const outcome = await scheduler.runPlan(plan);
+  assert.equal(outcome.completed.length, 3);
+  assert.equal(outcome.skipped.length, 0);
+  fs.rmSync(root, { recursive: true, force: true });
+});

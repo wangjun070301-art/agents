@@ -263,6 +263,17 @@ export class Scheduler {
     const pending = new Set(tasks.map((t) => t.task_id));
 
     while (pending.size > 0) {
+      // A blocked pipeline means the whole stage is waiting for a human. Running
+      // the remaining tasks would build on work nobody has accepted yet, so the
+      // plan stops here and reports what is left, rather than pretending the
+      // rest of the stage is still in flight.
+      if (this.options.pipeline.isBlocked) {
+        for (const id of pending) {
+          skipped.push({ taskId: id, because: "pipeline blocked; waiting for a human" });
+        }
+        break;
+      }
+
       const ready = [...pending]
         .map((id) => byId.get(id)!)
         .filter((task) => task.dependencies.every((d) => !byId.has(d) || completed.has(d) || failed.some((f) => f.taskId === d)));
@@ -278,6 +289,13 @@ export class Scheduler {
       }
 
       for (const task of ready) {
+        // A task in the same batch may have blocked the pipeline; the rest of
+        // this batch must not run past that point.
+        if (this.options.pipeline.isBlocked) {
+          skipped.push({ taskId: task.task_id, because: "pipeline blocked; waiting for a human" });
+          pending.delete(task.task_id);
+          continue;
+        }
         const blocked = task.dependencies.find((d) => failed.some((f) => f.taskId === d));
         if (blocked) {
           skipped.push({ taskId: task.task_id, because: `dependency ${blocked} failed` });
