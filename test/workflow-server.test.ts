@@ -293,3 +293,35 @@ test("the state snapshot always carries the output lines array", async () => {
     assert.equal(state.outputLines.length, 0);
   });
 });
+
+/**
+ * A state directory that is a regular file used to be accepted at startup and
+ * only fail on the first stage change, leaving the panel alive but unable to
+ * record anything. It must be refused immediately instead.
+ */
+test("a state directory that is a regular file is refused at startup", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "panel-notdir-"));
+  const file = path.join(dir, "state-is-a-file");
+  fs.writeFileSync(file, "not a directory", "utf8");
+  try {
+    assert.throws(
+      () => createPanel({ stateDir: file, port: 0 }),
+      /stateDir is not a directory/,
+      "a file must not be mistaken for a state directory",
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a missing state directory is created rather than refused", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "panel-mkdir-"));
+  const nested = path.join(dir, "a", "b", "c");
+  try {
+    const panel = createPanel({ stateDir: nested, port: 0 });
+    assert.equal(fs.existsSync(nested), true, "the panel must create its state directory");
+    assert.equal(panel.pipeline.stage, "INTAKE", "a fresh directory starts at INTAKE");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

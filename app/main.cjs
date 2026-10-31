@@ -42,8 +42,13 @@ app.whenReady().then(async () => {
         // Loading the page is not the same as the panel rendering. Ask the
         // renderer whether its own markup and data arrived, so a blank window
         // cannot pass as a working one.
-        try {
-          const rendered = await win.webContents.executeJavaScript(`
+        //
+        // `did-finish-load` fires when the HTML is parsed, which is before the
+        // renderer's own `load()` fetch resolves. Poll until the stage map is
+        // drawn or the budget runs out, so this is a real check rather than a
+        // race that passes on a fast machine and fails on a slow one.
+        const readState = () =>
+          win.webContents.executeJavaScript(`
             ({
               title: document.title,
               hasStageMap: !!document.getElementById('stageMap'),
@@ -53,11 +58,18 @@ app.whenReady().then(async () => {
               stageHint: document.getElementById('stageHint').textContent,
             })
           `);
+        try {
+          let rendered = await readState();
+          for (let attempt = 0; attempt < 40 && rendered.stageRows !== 13; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            rendered = await readState();
+          }
           const ok =
             rendered.hasStageMap &&
             rendered.hasNextStages &&
             rendered.stageRows === 13 &&
-            rendered.gates === 6;
+            rendered.gates === 6 &&
+            /当前阶段/.test(rendered.stageHint);
           console.log(`[app] render: ${JSON.stringify(rendered)}`);
           console.log(ok ? "[app] smoke: ok" : "[app] smoke: render incomplete");
           panel.stop().catch(() => {});

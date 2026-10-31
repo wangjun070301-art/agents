@@ -4,6 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { taskEnvelopeSchema } from "../src/workflow/contracts.js";
+import type { TaskEnvelope } from "../src/workflow/contracts.js";
+import { Scheduler } from "../src/workflow/scheduler.js";
+import { Pipeline } from "../src/workflow/pipeline.js";
+import { requirementsSchema } from "../src/workflow/contracts.js";
 import {
   CodexAdapter,
   CodexAdapterError,
@@ -339,6 +343,66 @@ test("a timeout is not retried, because it would fail the same way", async () =>
     (error: unknown) => error instanceof CodexAdapterError && error.kind === "timeout",
   );
   assert.equal(calls, 1, "a timeout must not be retried");
+});
+
+/**
+ * Two retry layers exist: the adapter retries a malformed reply internally
+ * (`formatRetries`), and the scheduler retries the whole task (`maxAttempts`).
+ * P13 recorded that this interaction was never tested, and the answer is not
+ * the obvious one: they do NOT multiply. `result-invalid` is declared
+ * non-retryable, so once the adapter exhausts its own budget the scheduler
+ * stops after a single attempt instead of paying for another full round.
+ */
+test("a malformed reply costs the adapter's budget once, not the scheduler's too", async () => {
+  const home = scratchHome();
+  const requirements = requirementsSchema.parse([
+    {
+      req_id: "REQ-1",
+      statement: "the task runs",
+      acceptance: [
+        {
+          ac_id: "AC-1",
+          requirement_id: "REQ-1",
+          description: "one check",
+          kind: "automated",
+          verification_command: "node --version",
+        },
+      ],
+    },
+  ]);
+  let childRuns = 0;
+  const adapter = new CodexAdapter({
+    codexPath: process.execPath,
+    codexHome: home,
+    model: "m",
+    formatRetries: 2, // 3 child runs per adapter.execute()
+    spawn: async () => {
+      childRuns += 1;
+      const runDir = path.join(home, "runs", envelope.task_id);
+      fs.mkdirSync(runDir, { recursive: true });
+      fs.writeFileSync(path.join(runDir, "result.json"), "[R]\n\nprose again.\n", "utf8");
+      return { code: 0, stdout: "", stderr: "", timedOut: false };
+    },
+  });
+
+  let executeCalls = 0;
+  const counting = {
+    ...adapter,
+    execute: async (envelope: TaskEnvelope) => {
+      executeCalls += 1;
+      return adapter.execute(envelope);
+    },
+  };
+  const scheduler = new Scheduler({
+    adapter: counting,
+    requirements,
+    pipeline: new Pipeline("IMPLEMENT"),
+    maxAttempts: 2,
+  });
+
+  await scheduler.runTask(envelope);
+  assert.equal(executeCalls, 1, "result-invalid is non-retryable, so the scheduler stops after one");
+  assert.equal(childRuns, 3, "the adapter still spends its own formatRetries budget");
 });
 
 test("a child that claims success while exiting non-zero becomes blocked", async () => {

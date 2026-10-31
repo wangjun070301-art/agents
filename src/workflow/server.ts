@@ -35,7 +35,28 @@ export function createPanel(options: ServerOptions): {
   start: () => Promise<number>;
   stop: () => Promise<void>;
 } {
-  const stateDir = fs.realpathSync(options.stateDir);
+  /**
+   * The state directory must be a directory, and a missing one is created.
+   *
+   * Without this check a path pointing at a regular file (or a path whose
+   * parent is missing) was accepted at startup and only failed later, on the
+   * first stage change, as a raw EEXIST/ENOTDIR from deep inside persist().
+   * The panel then looked alive while being unable to record anything.
+   */
+  let resolvedStateDir: string;
+  try {
+    const stat = fs.statSync(options.stateDir);
+    if (!stat.isDirectory()) {
+      throw new Error(`stateDir is not a directory: ${options.stateDir}`);
+    }
+    resolvedStateDir = fs.realpathSync(options.stateDir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") throw error;
+    fs.mkdirSync(options.stateDir, { recursive: true });
+    resolvedStateDir = fs.realpathSync(options.stateDir);
+  }
+  const stateDir = resolvedStateDir;
   const stateFile = path.join(stateDir, "pipeline.json");
   const pipeline = Pipeline.restore(stateFile);
   const host = options.host ?? "127.0.0.1";
@@ -66,7 +87,17 @@ export function createPanel(options: ServerOptions): {
     history: pipeline.history,
     tasks: readTaskRecords(stateDir),
     project: readProject(stateDir) ?? null,
-    running: active ? { taskId: active.taskId, cancelling: active.cancelling, startedAt: active.startedAt } : null,
+    running: active
+      ? {
+          taskId: active.taskId,
+          // A plan's `taskId` is the literal string "PLAN", so the UI could not
+          // say which task was actually running. The adapter already reports
+          // it; expose it instead of leaving the panel guessing.
+          currentTask: active.currentTask,
+          cancelling: active.cancelling,
+          startedAt: active.startedAt,
+        }
+      : null,
     lastRun: lastRun ?? null,
     outputLines: (active?.taskId ?? lastRun?.taskId) ? (active?.lines ?? lastLines) : [],
     /** Which stages this stage may legally move to, with the gate on that edge. */
@@ -911,7 +942,12 @@ function renderRunning(running,lastRun,outputLines){
   const badge=$('runState');
   const outBox=$('outputCard');
   if(running){
-    badge.textContent='运行中：'+running.taskId+(running.cancelling?'（正在取消）':'');badge.className='badge warn';
+    // A plan's taskId is the literal "PLAN"; currentTask is the task actually
+    // in flight. Show both so the badge never claims a plan is a single task.
+    const shown=running.currentTask&&running.currentTask!==running.taskId
+      ?running.taskId+' › '+running.currentTask
+      :(running.currentTask||running.taskId);
+    badge.textContent='运行中：'+shown+(running.cancelling?'（正在取消）':'');badge.className='badge warn';
     outBox.hidden=false;$('cancelBtn').disabled=running.cancelling;
     $('output').textContent=(outputLines||[]).join('').slice(-2000);
     return;

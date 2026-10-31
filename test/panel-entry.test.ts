@@ -221,3 +221,30 @@ test("app/panel-host.cjs parses and exports the two seams", () => {
   assert.equal(typeof host.resolveStateDir, "function");
   assert.equal(typeof host.startPanel, "function");
 });
+
+/**
+ * Two instances must not fight over a port. `port: 0` is what makes that
+ * work, and P23 recorded it as untested: the theory was fine, the behaviour
+ * was not observed.
+ */
+test("two panels started at once bind different ports and both serve", async () => {
+  const first = fs.mkdtempSync(path.join(os.tmpdir(), "panel-a-"));
+  const second = fs.mkdtempSync(path.join(os.tmpdir(), "panel-b-"));
+  const [a, b] = await Promise.all([
+    host.startPanel({ repoRoot: repo, stateDir: first, port: 0 }),
+    host.startPanel({ repoRoot: repo, stateDir: second, port: 0 }),
+  ]);
+  try {
+    assert.notEqual(a.port, b.port, "two instances must not share a port");
+    for (const started of [a, b]) {
+      const response = await fetch(started.url);
+      assert.equal(response.status, 200, `${started.url} must serve`);
+      const state = (await (await fetch(`${started.url}api/state`)).json()) as { stage: string };
+      assert.equal(state.stage, "INTAKE");
+    }
+  } finally {
+    await Promise.all([a.panel.stop(), b.panel.stop()]);
+    fs.rmSync(first, { recursive: true, force: true });
+    fs.rmSync(second, { recursive: true, force: true });
+  }
+});
