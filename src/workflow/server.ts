@@ -3,6 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { Pipeline } from "./pipeline.js";
 import type { Stage } from "./contracts.js";
+import { readProject, writeProject, codexHomeFor, defaultCodexPath, type Project } from "./project.js";
+import { CodexAdapter } from "./adapters/codex.js";
+import { Scheduler } from "./scheduler.js";
+import { LEGAL_TRANSITIONS, gateFor } from "./states.js";
+import { evaluateGate } from "./gates.js";
 
 /**
  * A small local control panel for one pipeline.
@@ -18,6 +23,8 @@ export interface ServerOptions {
   stateDir: string;
   port?: number;
   host?: string;
+  /** Overrides the codex binary path; defaults to the machine's install. */
+  codexPath?: string;
 }
 
 export function createPanel(options: ServerOptions): {
@@ -31,6 +38,9 @@ export function createPanel(options: ServerOptions): {
   const pipeline = Pipeline.restore(stateFile);
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 18493;
+  /** A run in flight, so the UI cannot start two at once. */
+  let running: { taskId: string; startedAt: string } | undefined;
+  let lastRun: { taskId: string; ok: boolean; finishedAt: string; failure?: unknown } | undefined;
 
   const send = (res: http.ServerResponse, status: number, body: string, type = "application/json") => {
     res.writeHead(status, { "content-type": `${type}; charset=utf-8`, "cache-control": "no-store" });
@@ -43,6 +53,14 @@ export function createPanel(options: ServerOptions): {
     passedGates: pipeline.passedGates,
     history: pipeline.history,
     tasks: readTaskRecords(stateDir),
+    project: readProject(stateDir) ?? null,
+    running: running ?? null,
+    lastRun: lastRun ?? null,
+    /** Which stages this stage may legally move to, with the gate on that edge. */
+    nextStages: LEGAL_TRANSITIONS[pipeline.stage].map((to) => ({
+      to,
+      gate: gateFor(pipeline.stage, to) ?? null,
+    })),
   });
 
   const server = http.createServer((req, res) => {
@@ -91,6 +109,93 @@ export function createPanel(options: ServerOptions): {
         });
       return;
     }
+    if (req.method === "POST" && url.pathname === "/api/project") {
+      readJson(req)
+        .then((body) => {
+          const project = writeProject(stateDir, body);
+          send(res, 200, JSON.stringify({ ok: true, project }));
+        })
+        .catch((error: unknown) => {
+          send(res, 400, JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/run") {
+      readJson(req)
+        .then(async (body) => {
+          const project = readProject(stateDir);
+          if (!project) {
+            send(res, 400, JSON.stringify({ error: "no project configured" }));
+            return;
+          }
+          const taskId = (body?.taskId as string | undefined)?.trim();
+          const task = taskId
+            ? project.tasks.find((t) => t.task_id === taskId)
+            : project.tasks.find((t) => t.task_id === (body?.first as string | undefined)) ?? project.tasks[0];
+          if (!task) {
+            send(res, 404, JSON.stringify({ error: `no such task: ${taskId}` }));
+            return;
+          }
+          if (running) {
+            send(res, 409, JSON.stringify({ error: `a run is already in progress: ${running.taskId}` }));
+            return;
+          }
+          running = { taskId: task.task_id, startedAt: new Date().toISOString() };
+          send(res, 202, JSON.stringify({ accepted: true, taskId: task.task_id }));
+
+          // Run after responding, so the UI gets its acknowledgement at once
+          // instead of waiting on a child process that may take minutes.
+          void executeTask(project, task, stateDir, options.codexPath)
+            .then((result) => {
+              lastRun = {
+                taskId: task.task_id,
+                ok: result.ok,
+                finishedAt: new Date().toISOString(),
+                ...(result.failure ? { failure: result.failure } : {}),
+              };
+            })
+            .catch((error: unknown) => {
+              lastRun = {
+                taskId: task.task_id,
+                ok: false,
+                finishedAt: new Date().toISOString(),
+                failure: { reason: "panel-error", detail: error instanceof Error ? error.message : String(error) },
+              };
+            })
+            .finally(() => {
+              running = undefined;
+            });
+        })
+        .catch((error: unknown) => {
+          send(res, 400, JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/advance") {
+      readJson(req)
+        .then((body) => {
+          const to = body?.to as Stage | undefined;
+          if (!to) {
+            send(res, 400, JSON.stringify({ error: "advance needs `to`" }));
+            return;
+          }
+          const gate = gateFor(pipeline.stage, to);
+          // A gated edge needs evidence. The panel cannot invent it, so it
+          // refuses rather than letting a click bypass a gate.
+          if (gate) {
+            send(res, 409, JSON.stringify({
+              error: `stage ${pipeline.stage} -> ${to} is gated by ${gate}; run a task to produce its evidence`,
+            }));
+            return;
+          }
+          const outcome = pipeline.advance({ to, note: (body?.note as string | undefined)?.trim() || "advanced from the panel" });
+          send(res, outcome.ok ? 200 : 409, JSON.stringify(outcome));
+        })
+        .catch((error: unknown) => {
+          send(res, 400, JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        });
+      return;
+    }
     send(res, 404, JSON.stringify({ error: "not found" }));
   });
 
@@ -129,6 +234,68 @@ function readJson(req: http.IncomingMessage): Promise<Record<string, unknown> | 
     });
     req.on("error", reject);
   });
+}
+
+/**
+ * Run one task with the real adapter and the real scheduler, then let the
+ * stage gate judge it. Returns whatever the scheduler decided; the caller only
+ * records it.
+ */
+async function executeTask(
+  project: Project,
+  task: Project["tasks"][number],
+  stateDir: string,
+  codexPath: string | undefined,
+): Promise<{ ok: boolean; failure?: unknown }> {
+  const home = codexHomeFor(stateDir);
+  fs.mkdirSync(home, { recursive: true });
+  // The adapter needs a writable CODEX_HOME with auth in it. Copy the user's
+  // once, so a run does not depend on the live home being writable.
+  for (const file of ["auth.json", "config.toml", "cc-switch-model-catalog.json"]) {
+    const from = path.join(process.env.USERPROFILE ?? "", ".codex", file);
+    const to = path.join(home, file);
+    if (fs.existsSync(from) && !fs.existsSync(to)) fs.copyFileSync(from, to);
+  }
+
+  const adapter = new CodexAdapter({
+    codexPath: codexPath ?? defaultCodexPath(),
+    codexHome: home,
+    model: project.model,
+    sandbox: project.sandbox,
+    observeWorktree: true,
+  });
+  const pipeline = Pipeline.restore(path.join(stateDir, "pipeline.json"));
+  const scheduler = new Scheduler({
+    adapter,
+    requirements: project.requirements,
+    pipeline,
+    maxAttempts: 2,
+    stateDir,
+  });
+
+  const outcome = await scheduler.runTask(task);
+  if (outcome.ok) {
+    // The task's own evidence supports its claim; now the stage gate decides.
+    const last = outcome.attempts.at(-1);
+    const next = nextStage(pipeline.stage);
+    if (next) {
+      scheduler.advanceStage(next, {
+        requirements: project.requirements,
+        tasks: project.tasks,
+        envelope: task,
+        result: last?.result,
+        deliveredArtifact: task.base_revision,
+        changedFiles: last?.observedChanges,
+      }, `task ${task.task_id} completed`);
+    }
+  }
+  return { ok: outcome.ok, ...(outcome.failure ? { failure: outcome.failure } : {}) };
+}
+
+/** The forward edge out of a stage, if there is one. */
+function nextStage(stage: Stage): Stage | undefined {
+  const edges = LEGAL_TRANSITIONS[stage].filter((to) => to !== "BLOCKED");
+  return edges[0];
 }
 
 /** Every per-task record under stateDir/tasks, newest first. */
@@ -198,22 +365,41 @@ button:disabled{opacity:.4;cursor:default}
 @media(max-width:880px){.row{grid-template-columns:minmax(0,1fr)}body{padding:20px}}
 </style></head><body>
 <h1>流水线控制台</h1>
-<p class="sub">只读状态 + 人工放行。启动任务请在命令行运行调度器。</p>
+<p class="sub">配置项目、启动任务、推进阶段、人工放行。所有操作都记入历史。</p>
 <div class="row">
   <section class="card"><div class="head"><h2>当前阶段</h2><span class="badge" id="state">读取中</span></div>
     <div class="body"><p class="stage" id="stage">—</p><p class="label" id="stageHint"></p>
       <div class="gates" id="gates"></div>
+      <p class="label" style="margin-top:20px">可推进到</p>
+      <div class="actions" id="nextStages"></div>
       <div id="releaseBox" hidden>
-        <p class="label" style="margin-top:20px">放行回哪个阶段</p>
+        <p class="label" style="margin-top:18px">放行回哪个阶段</p>
         <input id="releaseTo" placeholder="例如 IMPLEMENT">
         <textarea id="releaseNote" placeholder="为什么可以继续（会记入历史）"></textarea>
         <div class="actions"><button id="releaseBtn">放行</button><button class="ghost" id="blockBtn">改为阻塞</button></div>
-        <div class="msg" id="actionMsg"></div>
       </div>
+      <div class="msg" id="actionMsg"></div>
     </div>
   </section>
   <section class="card"><div class="head"><h2>阶段历史</h2><span class="badge" id="count">0</span></div>
     <div class="body" id="history"><div class="empty">还没有阶段变化。</div></div>
+  </section>
+</div>
+<div class="row" style="margin-top:20px">
+  <section class="card"><div class="head"><h2>项目配置</h2><span class="badge" id="projState">未配置</span></div>
+    <div class="body">
+      <p class="label">名称</p><input id="pName" placeholder="例如 fixture">
+      <p class="label" style="margin-top:12px">代码目录（绝对路径）</p><input id="pRepo" placeholder="C:\\path\\to\\repo">
+      <p class="label" style="margin-top:12px">模型</p><input id="pModel" value="deepseek-v4.1-flash-solo">
+      <p class="label" style="margin-top:12px">沙箱</p><input id="pSandbox" value="bypass" placeholder="read-only / workspace-write / bypass">
+      <p class="label" style="margin-top:12px">需求与任务（JSON）</p>
+      <textarea id="pJson" style="min-height:180px;font-family:ui-monospace,monospace;font-size:12px"></textarea>
+      <div class="actions"><button id="saveProject">保存配置</button></div>
+      <div class="msg" id="projMsg"></div>
+    </div>
+  </section>
+  <section class="card"><div class="head"><h2>任务</h2><span class="badge" id="runState">空闲</span></div>
+    <div class="body" id="taskList"><div class="empty">先保存项目配置。</div></div>
   </section>
 </div>
 <section class="card" style="margin-top:20px"><div class="head"><h2>任务记录</h2><span class="badge" id="taskCount">0</span></div>
@@ -225,6 +411,7 @@ const stageNames={INTAKE:'接单',CLARIFY:'澄清',BASELINE:'基线',SPEC:'需�
 const gateOrder=['G0','G1','G2','G3','G4','G5'];
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
 let lastBlockedFrom=null;
+let projectLoaded=false;
 async function load(){
   const r=await fetch('/api/state');const s=await r.json();
   $('stage').textContent=stageNames[s.stage]||s.stage;
@@ -236,6 +423,18 @@ async function load(){
   lastBlockedFrom=lastBlocked?lastBlocked.from:null;
   $('releaseBox').hidden=!s.blocked;
   if(s.blocked&&lastBlockedFrom)$('releaseTo').value=lastBlockedFrom;
+  const next=$('nextStages');next.replaceChildren();
+  for(const edge of s.nextStages){
+    if(edge.to==='BLOCKED')continue;
+    const b=el('button','ghost',(stageNames[edge.to]||edge.to)+(edge.gate?' ('+edge.gate+')':''));
+    b.onclick=()=>post('/api/advance',{to:edge.to,note:'从面板推进'});
+    if(edge.gate)b.disabled=true;
+    if(edge.gate)b.title='这一步需要门禁证据，跑一个任务来产生';
+    next.append(b);
+  }
+  renderProject(s.project);
+  renderTasks(s);
+  renderRunning(s.running,s.lastRun);
   $('count').textContent=String(s.history.length);
   const h=$('history');h.replaceChildren();
   if(!s.history.length)h.append(el('div','empty','还没有阶段变化。'));
@@ -258,6 +457,62 @@ async function load(){
     t.append(item);
   }
 }
+function renderProject(project){
+  const badge=$('projState');
+  if(!project){badge.textContent='未配置';badge.className='badge warn';return;}
+  badge.textContent=project.name;badge.className='badge';
+  if(!projectLoaded){
+    $('pName').value=project.name;
+    $('pRepo').value=project.repo_path;
+    $('pModel').value=project.model;
+    $('pSandbox').value=project.sandbox;
+    $('pJson').value=JSON.stringify({requirements:project.requirements,tasks:project.tasks},null,2);
+    projectLoaded=true;
+  }
+}
+function renderTasks(s){
+  const list=$('taskList');
+  if(!s.project){list.replaceChildren(el('div','empty','先保存项目配置。'));return;}
+  const fingerprint=JSON.stringify([s.project.tasks.map(t=>t.task_id),s.running,s.lastRun]);
+  if(list.dataset.fp===fingerprint)return;
+  list.dataset.fp=fingerprint;
+  list.replaceChildren();
+  for(const task of s.project.tasks){
+    const item=el('div','item');
+    const head=el('div');
+    head.append(el('b',null,task.role),el('span','mono','  '+task.task_id));
+    item.append(head,el('div','mono',task.objective.slice(0,160)));
+    const btn=el('button',null,'运行这个任务');
+    btn.style.marginTop='8px';
+    btn.disabled=!!s.running;
+    btn.onclick=()=>runTask(task.task_id);
+    item.append(btn);
+    list.append(item);
+  }
+}
+function renderRunning(running,lastRun){
+  const badge=$('runState');
+  if(running){badge.textContent='运行中：'+running.taskId;badge.className='badge warn';return;}
+  if(lastRun){badge.textContent=(lastRun.ok?'完成':'失败')+'：'+lastRun.taskId;badge.className='badge'+(lastRun.ok?'':' bad');return;}
+  badge.textContent='空闲';badge.className='badge';
+}
+async function runTask(taskId){
+  const r=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({taskId})});
+  const v=await r.json();
+  const m=$('actionMsg');
+  if(!r.ok){m.className='msg err';m.textContent=v.error||'启动失败';return;}
+  m.className='msg';m.textContent='已启动，任务在后台跑，页面每 3 秒刷新';load();
+}
+$('saveProject').onclick=async()=>{
+  const m=$('projMsg');
+  let parsed;
+  try{parsed=JSON.parse($('pJson').value||'{}');}catch(e){m.className='msg err';m.textContent='JSON 解析失败：'+e.message;return;}
+  const body={name:$('pName').value.trim(),repo_path:$('pRepo').value.trim(),model:$('pModel').value.trim(),sandbox:$('pSandbox').value.trim()||'bypass',requirements:parsed.requirements,tasks:parsed.tasks};
+  const r=await fetch('/api/project',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const v=await r.json();
+  if(!r.ok){m.className='msg err';m.textContent=v.error||'保存失败';return;}
+  m.className='msg';m.textContent='已保存';projectLoaded=false;load();
+};
 async function post(route,body){
   const r=await fetch(route,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   const v=await r.json();const m=$('actionMsg');

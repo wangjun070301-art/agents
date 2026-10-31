@@ -124,3 +124,131 @@ test("the task records are listed from disk", async () => {
     assert.deepEqual(state.tasks[0]?.files, ["attempt-1.json"]);
   });
 });
+
+/**
+ * The three new capabilities. Each is tested for the honest failure mode:
+ * saving a project that does not exist, running without a project, and
+ * advancing across a gate without evidence.
+ */
+
+const sampleProject = (repo: string) => ({
+  name: "fixture",
+  repo_path: repo,
+  model: "deepseek-v4.1-flash-solo",
+  sandbox: "bypass",
+  requirements: [
+    {
+      req_id: "REQ-1",
+      statement: "the fixture works",
+      acceptance: [
+        {
+          ac_id: "AC-1",
+          requirement_id: "REQ-1",
+          description: "test passes",
+          kind: "automated",
+          verification_command: "node --test",
+        },
+      ],
+    },
+  ],
+  tasks: [
+    {
+      task_id: "T-1",
+      role: "developer",
+      objective: "do the work",
+      repo_path: repo,
+      base_revision: "init",
+      allowed_paths: ["src"],
+      deliverables: ["src/x.js"],
+      acceptance_ids: ["AC-1"],
+      verification_commands: [{ command: "node --test", expect_exit: 0 }],
+    },
+  ],
+});
+
+test("a project can be saved and read back", async () => {
+  await withPanel(async ({ base, dir }) => {
+    const response = await fetch(`${base}/api/project`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(sampleProject(dir)),
+    });
+    assert.equal(response.status, 200);
+    const state = (await (await fetch(`${base}/api/state`)).json()) as {
+      project: { name: string; tasks: unknown[] } | null;
+    };
+    assert.equal(state.project?.name, "fixture");
+    assert.equal(state.project?.tasks.length, 1);
+  });
+});
+
+test("a project pointing at a missing repo is refused", async () => {
+  await withPanel(async ({ base }) => {
+    const response = await fetch(`${base}/api/project`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(sampleProject("C:/definitely-not-here")),
+    });
+    assert.equal(response.status, 400);
+    const body = (await response.json()) as { error: string };
+    assert.match(body.error, /does not exist/);
+  });
+});
+
+test("running a task without a configured project is refused", async () => {
+  await withPanel(async ({ base }) => {
+    const response = await fetch(`${base}/api/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ taskId: "T-1" }),
+    });
+    assert.equal(response.status, 400);
+    const body = (await response.json()) as { error: string };
+    assert.match(body.error, /no project configured/);
+  });
+});
+
+test("advancing across a gated edge without evidence is refused", async () => {
+  await withPanel(async ({ base, panel }) => {
+    // SPEC -> PLAN is gated by G0; the panel must not let a click pass it.
+    panel.pipeline.advance({ to: "CLARIFY" });
+    panel.pipeline.advance({ to: "BASELINE" });
+    panel.pipeline.advance({ to: "SPEC" });
+    const response = await fetch(`${base}/api/advance`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ to: "PLAN" }),
+    });
+    assert.equal(response.status, 409);
+    const body = (await response.json()) as { error: string };
+    assert.match(body.error, /gated by G0/);
+  });
+});
+
+test("advancing across an ungated edge is allowed", async () => {
+  await withPanel(async ({ base }) => {
+    const response = await fetch(`${base}/api/advance`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ to: "CLARIFY" }),
+    });
+    assert.equal(response.status, 200);
+    const outcome = (await response.json()) as { ok: boolean; stage: string };
+    assert.equal(outcome.ok, true);
+    assert.equal(outcome.stage, "CLARIFY");
+  });
+});
+
+test("the state reports which stages are reachable and which are gated", async () => {
+  await withPanel(async ({ base }) => {
+    const state = (await (await fetch(`${base}/api/state`)).json()) as {
+      nextStages: Array<{ to: string; gate: string | null }>;
+    };
+    assert.deepEqual(
+      state.nextStages.map((s) => s.to),
+      ["CLARIFY", "BLOCKED"],
+      "INTAKE may only go to CLARIFY or BLOCKED",
+    );
+    assert.equal(state.nextStages[0]?.gate, null);
+  });
+});
