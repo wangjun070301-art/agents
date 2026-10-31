@@ -159,12 +159,44 @@ record(
 );
 
 // ---------------------------------------------------------------- forbidden
-const removedTests = run("git", ["diff", "--numstat", "9752b1b^", "9752b1b", "--", "test/"], 30_000);
+const removedTests = run("git", ["diff", "--numstat", "9752b1b~1", "9752b1b", "--", "test/"], 30_000);
 record(
   "F1",
   "no test was deleted or weakened in the fix commit",
   removedTests.stdout.trim() === "",
   removedTests.stdout.trim() === "" ? "test/ untouched by 9752b1b" : removedTests.stdout.trim(),
+);
+
+// ---------------------------------------------------------------- R1 / R2
+// Behaviour and code checks, not commit-message checks. R2 is about the
+// fallback path; R1 cannot be proven without a power-loss experiment, so it is
+// only checked for being stated where a future reader will actually hit it.
+const service = fs.readFileSync(path.join(repo, "src", "persistent-service.ts"), "utf8");
+const syncBody = service.slice(
+  service.indexOf("function syncDurably"),
+  service.indexOf("function writeWakeIntent"),
+);
+
+record(
+  "R2",
+  'the r+ open degrades instead of throwing on a read-only file',
+  /catch/.test(syncBody) && syncBody.includes('"r"'),
+  /catch/.test(syncBody) && syncBody.includes('"r"')
+    ? "syncDurably has a fallback when r+ cannot be opened"
+    : 'syncDurably opens "r+" with no fallback; a read-only file throws EPERM and pump() reports "unavailable"',
+);
+
+// Only the consequence counts. The existing comment already says "the barrier
+// degrades", so matching "durab" alone would pass a note that explains nothing.
+const statesDurabilityGap =
+  /(power loss|power-loss|power cut|not durable|not persisted|directory entry|parent director)/i.test(syncBody);
+record(
+  "R1",
+  "the Windows durability gap is stated where a reader will hit it",
+  statesDurabilityGap,
+  statesDurabilityGap
+    ? "syncDurably explains the directory-entry consequence"
+    : "syncDurably says the barrier 'degrades' but never states that the temp->wake.json rename is not durable on Windows",
 );
 
 if (jsonOut) {
