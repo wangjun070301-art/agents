@@ -16,3 +16,6 @@ logs/
 *.zip
 *.sha256
 .DS_Store
+workflow-state/
+.probe-home/
+.codex-home-*/

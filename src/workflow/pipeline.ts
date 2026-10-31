@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { Gate, Requirements, Stage, TaskEnvelope, TaskResult } from "./contracts.js";
 import { assertTransition, canTransition, gateFor, isTerminal } from "./states.js";
 import { evaluateGate, type GateInput, type GateVerdict } from "./gates.js";
@@ -52,12 +54,45 @@ export class Pipeline {
   private current: Stage;
   private blockedFrom: Stage | undefined;
   readonly history: StageRecord[] = [];
+  /** Where to persist every stage change, when configured. */
+  private readonly stateFile?: string;
 
   constructor(
     start: Stage = "INTAKE",
     private readonly now: () => Date = () => new Date(),
+    stateFile?: string,
   ) {
     this.current = start;
+    this.stateFile = stateFile;
+  }
+
+  /**
+   * Rebuild a pipeline from a saved file. Returns the restored instance, or a
+   * fresh one when the file is missing or unreadable — a corrupt state file
+   * must not prevent the pipeline from starting.
+   */
+  static restore(stateFile: string, now: () => Date = () => new Date()): Pipeline {
+    let saved: { current: Stage; blockedFrom?: Stage; history: StageRecord[] } | undefined;
+    try {
+      saved = JSON.parse(fs.readFileSync(stateFile, "utf8")) as typeof saved;
+    } catch {
+      saved = undefined;
+    }
+    const pipeline = new Pipeline(saved?.current ?? "INTAKE", now, stateFile);
+    if (saved?.blockedFrom) pipeline.blockedFrom = saved.blockedFrom;
+    if (Array.isArray(saved?.history)) pipeline.history.push(...saved.history);
+    return pipeline;
+  }
+
+  /** Write the current stage and history to the configured file, if any. */
+  private persist(): void {
+    if (!this.stateFile) return;
+    fs.mkdirSync(path.dirname(this.stateFile), { recursive: true });
+    fs.writeFileSync(
+      this.stateFile,
+      JSON.stringify({ current: this.current, blockedFrom: this.blockedFrom, history: this.history }, null, 2),
+      "utf8",
+    );
   }
 
   get stage(): Stage {
@@ -154,6 +189,7 @@ export class Pipeline {
       this.blockedFrom = undefined;
     }
     this.current = to;
+    this.persist();
 
     return { ok: true, stage: to, record };
   }
