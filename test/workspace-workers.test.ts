@@ -89,7 +89,10 @@ test('one service wakes two project queues while preserving the legacy default a
   const a=await f.registry.ensure({workspace:f.a,sessionId:'legacy'},f.creator),b=await f.registry.ensure({workspace:f.b},f.creator);
   const registration:ServiceRegistration={version:1,sessionId:'legacy',workspace:f.a,projectDir:f.dir,nodeBin:process.execPath,cdpPort:18491,dbFile:f.config.dbFile,runsDir:f.config.runsDir!,workbuddyConfigDir:f.dir,cliElectronPath:f.config.cliElectronPath};
   writePrivateJson(f.config.serviceConfigFile!,registration);
-  const store=new TaskStore(f.config.dbFile);t.after(()=>store.close());
+  // Close inside the test body: the fixture's rmSync hook was registered first
+  // and runs first, and Windows will not delete a directory whose SQLite file
+  // is still open.
+  const store=new TaskStore(f.config.dbFile);
   const resolver=async (_:Config,input:{workspace:string;sessionId?:string;title?:string})=>{const result=await f.registry.ensure(input,f.creator);return{ok:true,...result,workspace:result.worker.workspace,sessionId:result.worker.sessionId,next:''};};
   const coordinator=new TaskCoordinator(f.config,store,new WorkBuddyClient(f.config),resolver);
   await coordinator.send({taskId:'task-a',objective:'project A',workspace:f.a});
@@ -107,10 +110,11 @@ test('one service wakes two project queues while preserving the legacy default a
   assert.equal(store.get('task-b')?.sessionId,b.worker.sessionId);assert.equal(store.get('task-b')?.workspace,f.b);
   const journal=new RunJournal(f.config.runsDir!,store.get('task-b')!.attemptId!);assert.match(journal.request().prompt,/project B revision/);
   assert.equal(JSON.parse(fs.readFileSync(f.config.serviceConfigFile!,'utf8')).sessionId,'legacy');
+  store.close();
 });
 
 test('duplicate IDs never reconfigure a workspace; explicit models are persisted for native wake',async t=>{
-  const f=fixture(t),store=new TaskStore(f.config.dbFile);t.after(()=>store.close());let resolved=0;
+  const f=fixture(t),store=new TaskStore(f.config.dbFile);let resolved=0;
   const coordinator=new TaskCoordinator(f.config,store,new WorkBuddyClient(f.config),async(_,input)=>{
     resolved++;const result=await f.registry.ensure(input,f.creator);
     return {ok:true,...result,workspace:result.worker.workspace,sessionId:result.worker.sessionId,next:''};
@@ -120,6 +124,10 @@ test('duplicate IDs never reconfigure a workspace; explicit models are persisted
   const sent=await coordinator.send({objective:'model task',workspace:f.b,model:'chosen'});
   assert.equal(sent.ok,true);assert.equal(resolved,1);
   const request=new RunJournal(f.config.runsDir!,sent.task!.attemptId!).request();assert.equal(request.model,'chosen');assert.equal(request.sessionId,f.registry.selected(f.b)!.sessionId);
+  // Close inside the test: the fixture's rmSync hook was registered first and
+  // therefore runs first, and Windows will not delete a directory while a
+  // SQLite handle is still open.
+  store.close();
 });
 
 test('failed model selection does not replace an existing workspace binding',async t=>{

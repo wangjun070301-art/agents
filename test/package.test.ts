@@ -6,7 +6,7 @@ import os from "node:os";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { collectReleaseFiles, createPackage, createSkillPackage } from "../scripts/package.mjs";
+import { collectReleaseFiles, createPackage, createSkillPackage, listArchive } from "../scripts/package.mjs";
 
 const execute = promisify(execFile);
 
@@ -107,7 +107,7 @@ test("release archive uses a file allowlist and hashes every included file", asy
     assert.ok(!selected.includes("skills/unrelated/SKILL.md"));
 
     const result = await createPackage(value.source, value.output, "0.2.0");
-    const listing = (await execute("unzip", ["-Z1", result.archive])).stdout.split("\n");
+    const listing = await listArchive(result.archive);
     const prefix = "codex-workbuddy-gateway-v0.2.0/";
     const files = listing.filter((name) => name && !name.endsWith("/")).map((name) => name.slice(prefix.length));
     assert.deepEqual(files.sort(), [...selected, "RELEASE_MANIFEST.json"].sort());
@@ -143,7 +143,7 @@ test("standalone skill archive contains only the four portable instruction files
   const value = await fixture();
   try {
     const result = await createSkillPackage(value.source, value.output, "0.3.1");
-    const listing = (await execute("unzip", ["-Z1", result.archive])).stdout.split("\n").filter((name) => name && !name.endsWith("/"));
+    const listing = (await listArchive(result.archive)).filter((name: string) => name && !name.endsWith("/"));
     assert.deepEqual(listing.sort(), ["workbuddy-executor/SKILL.md", "workbuddy-executor/agents/openai.yaml", "workbuddy-executor/references/setup.md", "workbuddy-executor/references/agent-hub.md"].sort());
     assert.equal(result.sha256, crypto.createHash("sha256").update(await fs.readFile(result.archive)).digest("hex"));
     await assert.rejects(createSkillPackage(value.source, value.output, "0.3.1"), /overwrite/);
@@ -166,7 +166,7 @@ test("standalone Harness skill archive includes instructions only and refuses un
   const value = await fixture();
   try {
     const result = await createSkillPackage(value.source, value.output, "0.5.0", "deepseek-executor");
-    const names = (await execute("unzip", ["-Z1", result.archive])).stdout.split("\n").filter(name => name && !name.endsWith("/"));
+    const names = (await listArchive(result.archive)).filter((name: string) => name && !name.endsWith("/"));
     assert.deepEqual(names.sort(), ["deepseek-executor/SKILL.md", "deepseek-executor/references/setup.md"].sort());
     assert.equal(result.files, 2);
     assert.equal(result.sha256, crypto.createHash("sha256").update(await fs.readFile(result.archive)).digest("hex"));

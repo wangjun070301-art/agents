@@ -33,7 +33,17 @@ export class DeepSeekClient implements DeepSeekTransport {
       try {
         const file = path.join(this.registryDir, name);
         const stat = fs.lstatSync(file);
-        if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()) continue;
+        // A registry file is trusted only when nobody else can read it. That is
+        // a POSIX question: Windows reports 0o666 for every regular file and
+        // has no uid, so applying the POSIX test there rejects every host. The
+        // registry lives under the user's own profile, which Windows protects
+        // with an inherited ACL, so the platform check is the guard there.
+        if (!stat.isFile()) continue;
+        if (process.platform !== "win32") {
+          if ((stat.mode & 0o077) !== 0) continue;
+          const uid = process.getuid?.();
+          if (uid !== undefined && stat.uid !== uid) continue;
+        }
         const value: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
         if (!value || typeof value !== "object") continue;
         const host = value as Partial<DeepSeekHost>;

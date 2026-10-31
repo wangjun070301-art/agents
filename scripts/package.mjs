@@ -8,6 +8,49 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 const execute = promisify(execFile);
+
+/**
+ * Archive helpers.
+ *
+ * The original implementation shelled out to `zip`, which does not exist on a
+ * stock Windows install. `tar.exe` ships with Windows 10+ and is bsdtar, so
+ * `tar -a` writes a real zip and `tar -tf` reads one. Probing once keeps the
+ * POSIX path unchanged where `zip` is present.
+ */
+let zipAvailable;
+async function hasZip() {
+  if (zipAvailable !== undefined) return zipAvailable;
+  try {
+    await execute("zip", ["--version"]);
+    zipAvailable = true;
+  } catch {
+    zipAvailable = false;
+  }
+  return zipAvailable;
+}
+
+export async function createArchive(stageDir, archivePath, rootName) {
+  if (await hasZip()) {
+    await execute("zip", ["-q", "-r", "-X", archivePath, rootName], { cwd: stageDir });
+    return;
+  }
+  await execute("tar", ["-a", "-c", "-f", archivePath, "-C", stageDir, rootName]);
+}
+
+/** List every entry in an archive, one per line, exactly as `unzip -Z1` would. */
+export async function listArchive(archivePath) {
+  if (await hasZip()) {
+    const { stdout } = await execute("unzip", ["-Z1", archivePath]);
+    return stdout.split("\n");
+  }
+  const { stdout } = await execute("tar", ["-tf", archivePath]);
+  // bsdtar on Windows writes CRLF and lists directory entries; `unzip -Z1`
+  // does neither, and every caller filters directories itself.
+  return stdout
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line && !line.endsWith("/"));
+}
 const ROOT_FILES = new Set(["README.md", ".gitignore", ".env.example", "package.json", "package-lock.json", "tsconfig.json", "LICENSE"]);
 const SKILLS = new Map([
   ["workbuddy-executor", ["skills/workbuddy-executor/SKILL.md", "skills/workbuddy-executor/agents/openai.yaml", "skills/workbuddy-executor/references/setup.md", "skills/workbuddy-executor/references/agent-hub.md"]],
@@ -66,7 +109,7 @@ export async function createSkillPackage(sourceDir, outputDir, version, skillNam
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, content, { mode: 0o644 });
     }
-    await execute("zip", ["-q", "-r", "-X", archive, skillName], { cwd: stage });
+    await createArchive(stage, archive, skillName);
     const digest = crypto.createHash("sha256").update(await fs.readFile(archive)).digest("hex");
     await fs.writeFile(checksum, `${digest}  ${path.basename(archive)}\n`, { flag: "wx" });
     return { archive, checksum, files: skillFiles.length, sha256: digest };
@@ -145,7 +188,7 @@ export async function createPackage(sourceDir, outputDir, version) {
     }
     const manifest = `${JSON.stringify({ project: "codex-workbuddy-gateway", version, videoAcceptance: "pending_user_verification", files: entries }, null, 2)}\n`;
     await fs.writeFile(path.join(stage, releaseName, "RELEASE_MANIFEST.json"), manifest);
-    await execute("zip", ["-q", "-r", "-X", archive, releaseName], { cwd: stage });
+    await createArchive(stage, archive, releaseName);
     const digest = crypto.createHash("sha256").update(await fs.readFile(archive)).digest("hex");
     await fs.writeFile(manifestPath, manifest, { flag: "wx" });
     await fs.writeFile(checksumPath, `${digest}  ${path.basename(archive)}\n`, { flag: "wx" });

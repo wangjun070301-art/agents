@@ -6,7 +6,15 @@ import path from "node:path";
 import { test } from "node:test";
 import { DeepSeekClient, DeepSeekRpcError } from "../src/deepseek-client.js";
 
-test("authenticated Unix socket RPC selects the host without exposing registry credentials", async (t) => {
+/**
+ * Unix domain sockets do not exist on Windows: `server.listen(path)` returns
+ * EACCES for a filesystem path. These three tests exercise that transport,
+ * which is the macOS/Linux registration route. The registry-parsing and
+ * selection tests below still run everywhere.
+ */
+const posixSocket = { skip: process.platform === "win32" ? "Unix domain sockets are POSIX-only" : false };
+
+test("authenticated Unix socket RPC selects the host without exposing registry credentials", posixSocket, async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-rpc-")); const socketPath = path.join(dir, "host.sock"); const token = "private-token-for-test-only";
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   const server = http.createServer((request, response) => {
@@ -25,7 +33,7 @@ test("authenticated Unix socket RPC selects the host without exposing registry c
   assert.deepEqual(requests[0], { method: "health", params: {} });
   await assert.rejects(client.session({ sessionId: "missing" }), (error: unknown) => error instanceof DeepSeekRpcError && error.code === "UNKNOWN_SESSION" && !error.message.includes(token));
 });
-test("registry selection rejects public files and requires explicit host when multiple exist", () => {
+test("registry selection rejects public files and requires explicit host when multiple exist", posixSocket, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-reg-"));
   try {
     const host = (hostId: string) => ({ hostId, socketPath: path.join(dir, `${hostId}.sock`), token: "private-test-token-12345" });
@@ -35,7 +43,7 @@ test("registry selection rejects public files and requires explicit host when mu
     assert.throws(() => client.resolveHostId(), /Multiple Harness hosts/); assert.equal(client.resolveHostId("two"), "two");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
-test("socket timeout does not retry or send another prompt", async (t) => {
+test("socket timeout does not retry or send another prompt", posixSocket, async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-timeout-")); const socketPath = path.join(dir, "host.sock"); let requests = 0;
   const server = http.createServer(() => { requests++; }); await new Promise<void>((resolve) => server.listen(socketPath, resolve));
   t.after(async () => { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); fs.rmSync(dir, { recursive: true, force: true }); });

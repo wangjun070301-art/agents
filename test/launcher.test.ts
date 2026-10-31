@@ -10,7 +10,13 @@ import { fileURLToPath } from "node:url";
 const execute = promisify(execFile);
 const source = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-test("all Node launchers load the shipped example config even without node on desktop PATH", async () => {
+/**
+ * The shipped launchers are `#!/bin/sh` scripts. Windows has no `/bin/sh` and
+ * cannot execute them, so this test is POSIX-only. That is a real gap, not a
+ * test artefact: on Windows the entry points are the npm scripts and
+ * `node tools/panel.mjs`, and the shell launchers are unused.
+ */
+test("all Node launchers load the shipped example config even without node on desktop PATH", { skip: process.platform === "win32" ? "bin/* are /bin/sh scripts; Windows has no POSIX shell" : false }, async () => {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "workbuddy-launcher-"));
   const root = path.join(temporary, "fresh install with spaces");
   try {

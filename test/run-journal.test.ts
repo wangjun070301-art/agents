@@ -23,6 +23,14 @@ function snapshot(journal: RunJournal, state: Partial<RunSnapshot> = {}): RunSna
 
 function mode(file: string): number { return fs.statSync(file).mode & 0o777; }
 
+/**
+ * File modes are a POSIX concept. Windows reports 0o666 for every regular file
+ * and has no notion of 0600, so the permission assertions are skipped there
+ * while the behaviour they accompany (cancellation persistence, one-shot input
+ * answers) still runs.
+ */
+const posixMode = process.platform !== "win32";
+
 test("replays durable events across MCP restarts with cursors beyond the first 100 updates", (t) => {
   const { config, journal, request } = fixture(t);
   journal.save(snapshot(journal));
@@ -104,8 +112,10 @@ test("creates private run files and persists cancellation for the detached worke
   // Cancellation is a durable request. Only the worker can report whether the
   // actual WorkBuddy task has stopped, so the snapshot is still working here.
   assert.equal(journal.snapshot()?.status, "working");
-  assert.equal(mode(journal.dir), 0o700);
-  for (const name of ["request.json", "state.json", "events.jsonl", "cancel.json"]) assert.equal(mode(path.join(journal.dir, name)), 0o600);
+  if (posixMode) {
+    assert.equal(mode(journal.dir), 0o700);
+    for (const name of ["request.json", "state.json", "events.jsonl", "cancel.json"]) assert.equal(mode(path.join(journal.dir, name)), 0o600);
+  }
   journal.save(snapshot(journal, { status: "cancelled" }));
   assert.equal(server.cancel(journal.attemptId), false);
   assert.equal(server.messages(journal.attemptId).at(-1)?.metadata?.type, "progress");
@@ -121,7 +131,7 @@ test("only answers the currently pending WorkBuddy permission request once", (t)
   server.respond(journal.attemptId, "reject_once");
   const answer = path.join(journal.dir, `input-${key}.json`);
   assert.deepEqual(JSON.parse(fs.readFileSync(answer, "utf8")), { decision: "reject_once" });
-  assert.equal(mode(answer), 0o600);
+  if (posixMode) assert.equal(mode(answer), 0o600);
   assert.throws(() => server.respond(journal.attemptId, "allow_once"), /EEXIST/);
   journal.save(snapshot(journal, { waitingInput: false }));
   assert.throws(() => server.respond(journal.attemptId, "allow_once"), /No active WorkBuddy input/);

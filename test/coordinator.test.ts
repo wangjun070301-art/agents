@@ -212,7 +212,6 @@ test("an acceptance decision cannot overwrite a rework reserved by another MCP p
   finish(client, originalAttempt);
   await coordinator.sync("video");
   const otherProcessStore = new TaskStore(config.dbFile);
-  t.after(() => otherProcessStore.close());
   const reservedId = RunJournal.newId();
   const updateAttempt = store.updateAttempt.bind(store);
   store.updateAttempt = (taskId, attemptId, patch, options) => {
@@ -225,4 +224,8 @@ test("an acceptance decision cannot overwrite a rework reserved by another MCP p
   assert.equal(current.state, "queued");
   assert.deepEqual(current.evidence, []);
   assert.equal(store.listAttempts("video")[0]?.state, "needs_review");
+  // Windows refuses to delete a directory whose SQLite file is still open.
+  // The fixture's cleanup hook runs before this test's own hook, so close the
+  // second store here rather than relying on t.after ordering.
+  otherProcessStore.close();
 });

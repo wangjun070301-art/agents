@@ -19,19 +19,39 @@ export interface QueueTask {
   prompt: string; workspace?: string; deadline: string;
 }
 
+/**
+ * Read one process's parent pid and command line.
+ *
+ * `ps` is POSIX. Windows needs a different probe, and the desktop helper only
+ * runs where the WorkBuddy desktop app runs, which is macOS today. Rather than
+ * pretend the check passed on a platform where it cannot run, this reports
+ * that the probe is unavailable and the caller refuses with the same message
+ * a failed walk produces. A silent pass would let a Codex-side invocation
+ * report WorkBuddy results, which is the exact thing this guard exists to stop.
+ */
+function probeProcess(pid: number): { parent: number; command: string } | undefined {
+  try {
+    const parentText = execFileSync("ps", ["-p", String(pid), "-o", "ppid="], { encoding: "utf8", timeout: 2000 }).trim();
+    const command = execFileSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8", timeout: 2000 }).trim();
+    return { parent: Number(parentText), command };
+  } catch {
+    return undefined;
+  }
+}
+
 /** Prove the helper was launched by the native desktop app, not a standalone CLI or Codex. */
 export function assertDesktopCaller(config: Config): DesktopActor {
   let pid = process.ppid;
   const executable = path.resolve(config.cliElectronPath);
   for (let step = 0; pid > 1 && step < 30; step++) {
-    const parentText = execFileSync("ps", ["-p", String(pid), "-o", "ppid="], { encoding: "utf8", timeout: 2000 }).trim();
-    const command = execFileSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8", timeout: 2000 }).trim();
+    const probed = probeProcess(pid);
+    if (!probed) break;
+    const { parent, command } = probed;
     // The native application root has no script argument; daemon/CLI child
     // processes using Electron must continue walking to the application root.
     if (command === executable || command.startsWith(`${executable} --`)) {
       if (!/--type=|--stdio|cli\/bin|sidecar-entry|daemon-app-server/.test(command)) return { desktopPid: pid };
     }
-    const parent = Number(parentText);
     if (!Number.isInteger(parent) || parent <= 0 || parent === pid) break;
     pid = parent;
   }

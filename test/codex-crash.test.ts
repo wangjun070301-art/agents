@@ -151,6 +151,59 @@ test("format retries do not retry a crash", async () => {
 });
 
 /**
+ * The cancel path with a real child.
+ *
+ * The other cancel test uses a spawn stub that resolves on abort, so it proves
+ * the signal is wired but not that a live process actually dies. Here the
+ * spawn starts a real sleeping child and honors the abort by killing it, the
+ * same way defaultSpawn does. If cancel() ever stops aborting, this child
+ * outlives the test and the assertion fails on the kill flag.
+ */
+test("cancel kills a real child process, not just the promise", async () => {
+  const home = scratchHome();
+  const { command, args } = sleepingCommand();
+  let killed = false;
+  const adapter = new CodexAdapter({
+    codexPath: process.execPath,
+    codexHome: home,
+    model: "m",
+    observeWorktree: false,
+    spawn: (_cmd, _spawnArgs, options) =>
+      new Promise((resolve) => {
+        const child = spawn(command, args, { cwd: options.cwd, stdio: "ignore" });
+        const onAbort = () => {
+          killed = true;
+          child.kill("SIGKILL");
+        };
+        options.signal?.addEventListener("abort", onAbort);
+        child.on("close", (code, signal) => {
+          options.signal?.removeEventListener("abort", onAbort);
+          resolve({
+            code: code ?? -1,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            ...(signal ? { killedBy: signal } : {}),
+            ...(killed ? { cancelled: true } : {}),
+          });
+        });
+      }),
+  });
+  const running = adapter.execute(envelope).catch((error: unknown) => error);
+  // Let the child actually start before cancelling.
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  await adapter.cancel(envelope.task_id);
+  const outcome = await running;
+  assert.equal(killed, true, "cancel must kill the live child");
+  assert.ok(
+    outcome instanceof CodexAdapterError &&
+      outcome.kind === "spawn-failed" &&
+      /cancelled/.test(outcome.message),
+    `a cancelled run must report as cancelled, got ${String(outcome)}`,
+  );
+});
+
+/**
  * The dangerous case: the child wrote part of a result file before it died.
  * A truncated JSON object may still parse if the truncation happens after the
  * closing brace of a nested object, or may parse into something plausible.
