@@ -24,6 +24,14 @@ export interface SpawnOutcome {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  /**
+   * Set when the child was terminated by a signal rather than exiting on its
+   * own. A killed process reports code null, so without this field a crash is
+   * indistinguishable from an ordinary non-zero exit.
+   */
+  killedBy?: string;
+  /** True when the kill came from this adapter's own cancel(). */
+  cancelled?: boolean;
 }
 
 export type SpawnFn = (
@@ -109,6 +117,7 @@ const defaultSpawn: SpawnFn = (command, args, options) =>
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let aborted = false;
     const finish = (outcome: SpawnOutcome) => {
       if (settled) return;
       settled = true;
@@ -121,6 +130,7 @@ const defaultSpawn: SpawnFn = (command, args, options) =>
       finish({ code: -1, stdout, stderr, timedOut: true });
     }, options.timeoutMs);
     const onAbort = () => {
+      aborted = true;
       child.kill("SIGKILL");
       finish({ code: -1, stdout, stderr, timedOut: false });
     };
@@ -132,7 +142,15 @@ const defaultSpawn: SpawnFn = (command, args, options) =>
       options.signal?.removeEventListener("abort", onAbort);
       reject(error);
     });
-    child.on("close", (code) => finish({ code: code ?? -1, stdout, stderr, timedOut: false }));
+    child.on("close", (code, signal) =>
+      finish({
+        code: code ?? -1,
+        stdout,
+        stderr,
+        timedOut: false,
+        ...(signal ? { killedBy: signal, ...(aborted ? { cancelled: true } : {}) } : {}),
+      }),
+    );
   });
 
 /**
@@ -587,6 +605,19 @@ export class CodexAdapter implements WorkflowAdapter {
       throw new CodexAdapterError(
         "timeout",
         `codex did not finish within ${envelope.timeout_seconds}s; stderr tail: ${outcome.stderr.slice(-800)}`,
+      );
+    }
+
+    // A killed child is a different failure from a child that exited on its
+    // own with a non-zero code: there is no exit code to trust, and any result
+    // file it left behind may be truncated mid-write.
+    if (outcome.cancelled) {
+      throw new CodexAdapterError("spawn-failed", "codex was cancelled before it finished");
+    }
+    if (outcome.killedBy) {
+      throw new CodexAdapterError(
+        "spawn-failed",
+        `codex was terminated by ${outcome.killedBy}; stderr tail: ${outcome.stderr.slice(-800)}`,
       );
     }
 
