@@ -45,6 +45,23 @@ npm run app        # 或 npm run app:build
 
 `PANEL_STATE` 环境变量可以指向别的状态目录，和 `--state` 等价。
 
+**Windows 启动器**：
+
+`bin/` 下除了 POSIX 的 `workbuddy-gateway` 等脚本，还有 `.cmd` 版本：
+
+| 脚本 | 作用 |
+|---|---|
+| `bin\workbuddy-gateway.cmd` | MCP 网关 |
+| `bin\workbuddy-worker.cmd` | 桌面队列 worker |
+| `bin\workbuddy-doctor.cmd` | 环境自检（需要先 `npm run build`） |
+| `bin\workbuddy-service.cmd` | 持久服务 |
+| `bin\agent-hub.cmd` / `bin\agent-hub-mcp.cmd` | Agent Hub |
+| `bin\deepseek-gateway.cmd` | DeepSeek 桥 |
+
+它们读同一个 `.env`，把项目根目录设为工作目录，并透传参数和退出码。
+`workbuddy-cli.cmd` 需要显式设置 `WORKBUDDY_CLI_ELECTRON` 和
+`WORKBUDDY_CLI_SCRIPT`——Windows 上没有可猜的默认安装路径。
+
 ## 二、第一次使用（3 步）
 
 **1. 填项目配置（左下角）**

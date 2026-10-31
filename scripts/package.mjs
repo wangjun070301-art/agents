@@ -66,7 +66,9 @@ const DIRECTORY_RULES = new Map([
   ["test", /\.test\.ts$/],
   ["docs", /^(?:video-explanation|FAILURE_REVIEW|USER_ACCEPTANCE|CODEX_WORKFLOW|QUEUE_WORKER|DEEPSEEK|AGENT_HUB_DESIGN|AGENT_HUB|RELEASE_NOTES)\.md$/],
   ["scripts", /^(?:package|install-skill|install-deepseek-skill|install-deepseek-plugin|deepseek-call|workbuddy-call|agent-hub-call)\.mjs$/],
-  ["bin", /^(?:workbuddy-(?:gateway|cli|doctor|worker|service)|deepseek-gateway|agent-hub(?:-mcp)?)$/],
+  // Both the POSIX shell launchers and their Windows .cmd counterparts ship,
+  // plus the shared .env loader the .cmd files call.
+  ["bin", /^(?:(?:workbuddy-(?:gateway|cli|doctor|worker|service)|deepseek-gateway|agent-hub(?:-mcp)?)(?:\.cmd)?|_load-env\.cmd)$/],
   ["dist", /\.(?:js|js\.map|d\.ts)$/],
   ["skills", /^(?:SKILL\.md|openai\.yaml|setup\.md)$/],
   ["deepseek-plugin", /./],
@@ -183,7 +185,10 @@ export async function createPackage(sourceDir, outputDir, version) {
       assertSafeContent(relative, content.toString("utf8"));
       const target = path.join(stage, releaseName, relative);
       await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, content, { mode: relative.startsWith("bin/") ? 0o755 : 0o644 });
+      // The POSIX launchers must stay executable. `.cmd` files are invoked by
+      // the command interpreter and only need to be readable.
+      const executable = relative.startsWith("bin/") && !relative.endsWith(".cmd");
+      await fs.writeFile(target, content, { mode: executable ? 0o755 : 0o644 });
       entries.push({ path: relative, bytes: content.length, sha256: crypto.createHash("sha256").update(content).digest("hex") });
     }
     const manifest = `${JSON.stringify({ project: "codex-workbuddy-gateway", version, videoAcceptance: "pending_user_verification", files: entries }, null, 2)}\n`;

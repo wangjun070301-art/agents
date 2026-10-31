@@ -33,6 +33,8 @@ async function fixture() {
     "bin/workbuddy-gateway": "#!/bin/sh\nexit 0\n",
     "bin/workbuddy-worker": "#!/bin/sh\nexit 0\n",
     "bin/workbuddy-service": "#!/bin/sh\nexit 0\n",
+    "bin/workbuddy-gateway.cmd": "@echo off\r\nexit /b 0\r\n",
+    "bin/_load-env.cmd": "@echo off\r\nexit /b 0\r\n",
     "docs/QUEUE_WORKER.md": "# Queue\n",
     "docs/USER_ACCEPTANCE.md": "# Pending\n",
     "docs/CODEX_WORKFLOW.md": "# Supervision\n",
@@ -94,6 +96,10 @@ test("release archive uses a file allowlist and hashes every included file", asy
     assert.ok(selected.includes(".env.example"));
     assert.ok(selected.includes("docs/CODEX_WORKFLOW.md"));
     assert.ok(selected.includes("bin/workbuddy-worker"));
+    // The Windows launchers ship beside the POSIX ones; a Windows install
+    // otherwise has no entry point at all.
+    assert.ok(selected.includes("bin/workbuddy-gateway.cmd"), "the .cmd launcher must ship");
+    assert.ok(selected.includes("bin/_load-env.cmd"), "the shared .env loader must ship");
     assert.ok(selected.includes("dist/desktop-worker-cli.js"));
     for (const filename of ["bin/workbuddy-service", "dist/persistent-service.js", "dist/service-cli.js", "dist/native-desktop-trigger.js"]) assert.ok(selected.includes(filename));
     assert.ok(selected.includes("docs/QUEUE_WORKER.md"));

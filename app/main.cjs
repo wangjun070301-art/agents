@@ -16,6 +16,7 @@ app.whenReady().then(async () => {
   try {
     const started = await startPanel({ repoRoot, stateDir, port: 0 });
     panel = started.panel;
+    console.log(`[app] panel: ${started.url}`);
 
     const win = new BrowserWindow({
       width: 1500,
@@ -26,6 +27,55 @@ app.whenReady().then(async () => {
       title: "流水线控制台",
       autoHideMenuBar: true,
       webPreferences: { nodeIntegration: false, contextIsolation: true },
+    });
+
+    /**
+     * A smoke run is the only way to prove the shell works without a human
+     * looking at it: load the page, report whether it rendered, and quit. It
+     * is opt-in so a normal launch still behaves like an app.
+     */
+    const smoke = process.env.PANEL_SMOKE === "1";
+
+    win.webContents.on("did-finish-load", async () => {
+      console.log("[app] window: loaded");
+      if (smoke) {
+        // Loading the page is not the same as the panel rendering. Ask the
+        // renderer whether its own markup and data arrived, so a blank window
+        // cannot pass as a working one.
+        try {
+          const rendered = await win.webContents.executeJavaScript(`
+            ({
+              title: document.title,
+              hasStageMap: !!document.getElementById('stageMap'),
+              hasNextStages: !!document.getElementById('nextStages'),
+              stageRows: document.querySelectorAll('.stage-row').length,
+              gates: document.querySelectorAll('.gate').length,
+              stageHint: document.getElementById('stageHint').textContent,
+            })
+          `);
+          const ok =
+            rendered.hasStageMap &&
+            rendered.hasNextStages &&
+            rendered.stageRows === 13 &&
+            rendered.gates === 6;
+          console.log(`[app] render: ${JSON.stringify(rendered)}`);
+          console.log(ok ? "[app] smoke: ok" : "[app] smoke: render incomplete");
+          panel.stop().catch(() => {});
+          app.exit(ok ? 0 : 1);
+        } catch (error) {
+          console.error(`[app] render: threw ${error instanceof Error ? error.message : String(error)}`);
+          panel.stop().catch(() => {});
+          app.exit(1);
+        }
+      }
+    });
+
+    win.webContents.on("did-fail-load", (_event, code, description) => {
+      console.error(`[app] window: failed to load (${code}) ${description}`);
+      if (smoke) {
+        panel.stop().catch(() => {});
+        app.exit(1);
+      }
     });
 
     win.loadURL(started.url);
