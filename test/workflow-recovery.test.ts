@@ -266,3 +266,106 @@ test("an error without a retryable flag is treated as non-retryable", async () =
   assert.equal(calls, 1, "an unclassified error must not be retried blindly");
   assert.equal(outcome.failure?.retryable, false);
 });
+
+/**
+ * Blocking policy. A retryable fault that outlives the budget means "stop and
+ * look", so the pipeline records that. A timeout or a cancel is a decision,
+ * not a fault, and must not freeze the whole pipeline.
+ */
+test("a retryable fault that exhausts the budget blocks the pipeline", async () => {
+  const pipeline = new Pipeline("IMPLEMENT");
+  const adapter: WorkflowAdapter = {
+    ...stub("ok"),
+    execute: async () => {
+      throw new CodexAdapterError("spawn-failed", "terminated by SIGKILL", true);
+    },
+    resume: async () => {
+      throw new CodexAdapterError("spawn-failed", "terminated by SIGKILL", true);
+    },
+  };
+  const scheduler = new Scheduler({
+    adapter,
+    requirements,
+    pipeline,
+    maxAttempts: 2,
+    blockOnExhaustion: true,
+  });
+  const outcome = await scheduler.runTask(envelope);
+  assert.equal(outcome.ok, false);
+  assert.equal(pipeline.stage, "BLOCKED", "the pipeline must stop for a human");
+  assert.equal(pipeline.isBlocked, true);
+  assert.match(outcome.failure!.detail, /pipeline blocked at IMPLEMENT/);
+});
+
+test("a non-retryable fault does not block the pipeline", async () => {
+  const pipeline = new Pipeline("IMPLEMENT");
+  const adapter: WorkflowAdapter = {
+    ...stub("ok"),
+    execute: async () => {
+      throw new CodexAdapterError("timeout", "codex did not finish", false);
+    },
+  };
+  const scheduler = new Scheduler({
+    adapter,
+    requirements,
+    pipeline,
+    maxAttempts: 2,
+    blockOnExhaustion: true,
+  });
+  const outcome = await scheduler.runTask(envelope);
+  assert.equal(outcome.ok, false);
+  assert.equal(pipeline.stage, "IMPLEMENT", "a timeout must not freeze the stage");
+  assert.equal(pipeline.isBlocked, false);
+});
+
+test("blocking is off by default", async () => {
+  const pipeline = new Pipeline("IMPLEMENT");
+  const adapter: WorkflowAdapter = {
+    ...stub("ok"),
+    execute: async () => {
+      throw new CodexAdapterError("spawn-failed", "terminated by SIGKILL", true);
+    },
+    resume: async () => {
+      throw new CodexAdapterError("spawn-failed", "terminated by SIGKILL", true);
+    },
+  };
+  const scheduler = new Scheduler({ adapter, requirements, pipeline, maxAttempts: 2 });
+  await scheduler.runTask(envelope);
+  assert.equal(pipeline.stage, "IMPLEMENT", "without the option, the stage stays put");
+});
+
+test("a blocked pipeline can be resumed by naming the stage that blocked", async () => {
+  const pipeline = new Pipeline("IMPLEMENT");
+  const adapter: WorkflowAdapter = {
+    ...stub("ok"),
+    execute: async () => {
+      throw new CodexAdapterError("spawn-failed", "terminated by SIGKILL", true);
+    },
+    resume: async () => {
+      throw new CodexAdapterError("spawn-failed", "terminated by SIGKILL", true);
+    },
+  };
+  const scheduler = new Scheduler({
+    adapter,
+    requirements,
+    pipeline,
+    maxAttempts: 2,
+    blockOnExhaustion: true,
+  });
+  await scheduler.runTask(envelope);
+  assert.equal(pipeline.stage, "BLOCKED");
+
+  // The resume must name the stage that blocked, and that stage must have a
+  // BLOCKED edge. IMPLEMENT does, so this is legal.
+  const resumed = pipeline.advance({ to: "IMPLEMENT", blockedFrom: "IMPLEMENT" });
+  assert.equal(resumed.ok, true, resumed.refused?.detail);
+  assert.equal(pipeline.stage, "IMPLEMENT");
+  assert.equal(pipeline.isBlocked, false);
+});
+
+test("a terminal stage cannot be blocked", () => {
+  const pipeline = new Pipeline("ARCHIVE");
+  const blocked = pipeline.advance({ to: "BLOCKED" });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.refused?.reason, "terminal");
+});

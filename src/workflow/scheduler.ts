@@ -16,6 +16,8 @@ export interface TaskAttempt {
   claimDiscrepancies?: Array<{ command: string; problems: string[] }>;
   /** Why this attempt was not accepted, when it was not. */
   refusal?: string;
+  /** Set when the attempt ended in an adapter error rather than a gate refusal. */
+  adapterFailure?: { kind: string; retryable: boolean; detail: string };
   startedAt: string;
   finishedAt: string;
 }
@@ -46,6 +48,14 @@ export interface SchedulerOptions {
   stateDir?: string;
   /** Clock injection, so a test can assert timestamps. */
   now?: () => Date;
+  /**
+   * When true, a task that exhausts its attempts on a retryable fault moves
+   * the pipeline to BLOCKED instead of leaving it where it was. A transient
+   * fault that survived the retry budget needs a human look, not a silent
+   * failure; a non-retryable fault (a timeout, a cancel) is a decision, and
+   * blocking the whole pipeline for it would be wrong.
+   */
+  blockOnExhaustion?: boolean;
 }
 
 /**
@@ -59,10 +69,12 @@ export interface SchedulerOptions {
 export class Scheduler {
   private readonly now: () => Date;
   private readonly maxAttempts: number;
+  private readonly blockOnExhaustion: boolean;
 
   constructor(private readonly options: SchedulerOptions) {
     this.now = options.now ?? (() => new Date());
     this.maxAttempts = options.maxAttempts ?? 2;
+    this.blockOnExhaustion = options.blockOnExhaustion ?? false;
   }
 
   private timestamp(): string {
@@ -102,6 +114,11 @@ export class Scheduler {
             attempt,
             envelope: taskEnvelope,
             refusal: `retryable adapter error: ${error instanceof Error ? error.message : String(error)}`,
+            adapterFailure: {
+              kind: adapterErrorKind(error),
+              retryable,
+              detail: error instanceof Error ? error.message : String(error),
+            },
             startedAt,
             finishedAt: this.timestamp(),
           });
@@ -117,8 +134,23 @@ export class Scheduler {
           detail: error instanceof Error ? error.message : String(error),
           retryable,
         };
-        this.persistFailure(failure);
-        return { ok: false, attempts, failure };
+        // Record the terminal adapter error on the attempt list too, so the
+        // blocking decision below can see it like any other attempt.
+        attempts.push({
+          attempt,
+          envelope: taskEnvelope,
+          refusal: error instanceof Error ? error.message : String(error),
+          adapterFailure: {
+            kind: adapterErrorKind(error),
+            retryable,
+            detail: error instanceof Error ? error.message : String(error),
+          },
+          startedAt,
+          finishedAt,
+        });
+        // Fall through to the shared failure path so the blocking decision
+        // applies to adapter errors too, not only to gate refusals.
+        return this.finishFailure(failure, attempts, envelope);
       }
 
       // Evidence is collected from the adapter, not derived from the result.
@@ -160,6 +192,36 @@ export class Scheduler {
       reason: attempts.length === 0 ? "no-progress" : "attempts-exhausted",
       detail: attempts.at(-1)?.refusal ?? "no attempt was made",
     };
+    return this.finishFailure(failure, attempts, envelope);
+  }
+
+  /**
+   * The single exit for every failed task. Both an adapter error and a
+   * gate-exhausted task end here, so the blocking policy cannot be bypassed by
+   * whichever path happened to fail.
+   */
+  private finishFailure(
+    failure: TaskFailure,
+    attempts: TaskAttempt[],
+    envelope: TaskEnvelope,
+  ): { ok: false; attempts: TaskAttempt[]; failure: TaskFailure } {
+
+    // A retryable fault that outlived the budget is a reason to stop and look,
+    // not a reason to discard the task. Blocking records that intent in the
+    // pipeline so the next reader knows the stage is waiting, not finished.
+    const lastFailure = lastAdapterFailureOf(attempts);
+    if (this.blockOnExhaustion && lastFailure?.retryable) {
+      const blocked = this.options.pipeline.advance({
+        to: "BLOCKED",
+        note: `task ${envelope.task_id}: ${lastFailure.detail}`,
+      });
+      if (!blocked.ok) {
+        failure.detail += ` (could not block: ${blocked.refused?.detail ?? "unknown"})`;
+      } else {
+        failure.detail += ` (pipeline blocked at ${blocked.record?.from})`;
+      }
+    }
+
     this.persistFailure(failure);
     return { ok: false, attempts, failure };
   }
@@ -342,6 +404,22 @@ function readObserved(adapter: WorkflowAdapter, taskId: string): string[] | unde
 function isRetryable(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   return (error as { retryable?: unknown }).retryable === true;
+}
+
+/** The adapter's own error kind, when it declares one. */
+function adapterErrorKind(error: unknown): string {
+  if (!error || typeof error !== "object") return "unknown";
+  const kind = (error as { kind?: unknown }).kind;
+  return typeof kind === "string" ? kind : "unknown";
+}
+
+/** The last attempt that ended in an adapter failure, if any. */
+function lastAdapterFailureOf(attempts: TaskAttempt[]): TaskAttempt["adapterFailure"] | undefined {
+  for (let i = attempts.length - 1; i >= 0; i -= 1) {
+    const found = attempts[i]?.adapterFailure;
+    if (found) return found;
+  }
+  return undefined;
 }
 
 function readDiscrepancies(
