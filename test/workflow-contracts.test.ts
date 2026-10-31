@@ -678,3 +678,25 @@ test("envelopes cannot cite an acceptance id no requirement defines", () => {
     "acceptance id not defined by any requirement: AC-999",
   ]);
 });
+
+test("a parenthesised deliverable is a placeholder, not a missing file", () => {
+  const env = taskEnvelopeSchema.parse({
+    ...envelope,
+    deliverables: ["(review record)"],
+    allowed_paths: [],
+  });
+  const result = taskResultSchema.parse({
+    task_id: "T-1",
+    status: "succeeded",
+    summary: "reviewed",
+    changed_files: [],
+    commands: [{ command: "npm test", exit_code: 0 }],
+    test_results: [{ name: "review", outcome: "passed", acceptance_ids: ["AC-1"] }],
+  });
+  const problems = validateTaskResult(env, result);
+  assert.equal(
+    problems.some((p) => p.startsWith("deliverable not produced")),
+    false,
+    `a placeholder must not be required on disk: ${problems.join("; ")}`,
+  );
+});

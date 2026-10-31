@@ -300,6 +300,10 @@ export function validateTaskResult(envelope: TaskEnvelope, result: TaskResult): 
   }
 
   for (const deliverable of envelope.deliverables) {
+    // A parenthesised entry is a placeholder for a task that produces no file
+    // (a review, a probe, a read-only check). It is not a path and must not be
+    // required on disk.
+    if (/^\(.*\)$/.test(deliverable.trim())) continue;
     const target = relTo(deliverable, envelope.repo_path, caseInsensitive);
     const produced = result.changed_files.some((file) =>
       samePath(relTo(file, envelope.repo_path, caseInsensitive), target, caseInsensitive),

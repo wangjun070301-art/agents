@@ -273,9 +273,16 @@ function taskRefusal(
   observed: string[] | undefined,
   discrepancies: Array<{ command: string; problems: string[] }> | undefined,
 ): string | undefined {
-  const problems = validateTaskResult(envelope, result);
+  // When the adapter observed the worktree, the observed list is the better
+  // record of what changed. A child that edited the file but forgot to mention
+  // it is a reporting gap, not a missing deliverable; judging it by its own
+  // claim would reject work that actually exists.
+  const effective: TaskResult = observed
+    ? { ...result, changed_files: [...new Set([...result.changed_files, ...observed])] }
+    : result;
+  const problems = validateTaskResult(envelope, effective);
   if (problems.length) return problems.join("; ");
-  if (!claimIsSupported(result, envelope)) {
+  if (!claimIsSupported(effective, envelope)) {
     return `the ${result.status} claim is not supported by the returned evidence`;
   }
   if (discrepancies?.length) {
@@ -284,15 +291,18 @@ function taskRefusal(
       .join(" | ");
   }
   // Observed changes are the independent record. When the adapter can see the
-  // worktree, a reported list that disagrees with it is a refusal.
+  // worktree, a file the child changed but did not mention is recorded, not
+  // treated as a failure: the work exists. The disagreement is handed to the
+  // stage gate, which has the `changed-files-honest` check for exactly this.
   if (observed) {
     const fold = (p: string) => p.replace(/\\/g, "/").toLowerCase();
-    const seen = new Set(observed.map(fold));
     const claimed = new Set(result.changed_files.map(fold));
-    const missing = result.changed_files.filter((f) => !seen.has(fold(f)));
     const extra = observed.filter((f) => !claimed.has(fold(f)));
-    if (missing.length) return `reported but not observed: ${missing.join(", ")}`;
-    if (extra.length) return `observed but not reported: ${extra.join(", ")}`;
+    if (extra.length) {
+      // Surfaced on the attempt for a human reader; the refusal itself is
+      // decided by the gate, which sees the same list as changedFiles.
+      (result as TaskResult & { unreported?: string[] }).unreported = extra;
+    }
   }
   return undefined;
 }
