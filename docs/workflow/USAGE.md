@@ -33,6 +33,18 @@ http://127.0.0.1:18493
 node tools/panel.mjs --state D:\my-project-state --port 19000
 ```
 
+**`--port 0` 会让系统分配一个空闲端口**，启动时打印的那一行才是真实端口。
+桌面版（`npm run app`）用的就是这个模式，避免两个实例抢同一个端口。
+
+**桌面版**：
+
+```powershell
+npm run build
+npm run app        # 或 npm run app:build
+```
+
+`PANEL_STATE` 环境变量可以指向别的状态目录，和 `--state` 等价。
+
 ## 二、第一次使用（3 步）
 
 **1. 填项目配置（左下角）**

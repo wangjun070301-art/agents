@@ -1,7 +1,6 @@
 const { app, BrowserWindow } = require("electron");
 const path = require("node:path");
-const http = require("node:http");
-const fs = require("node:fs");
+const { resolveStateDir, startPanel } = require("./panel-host.cjs");
 
 /**
  * The desktop shell. It starts the same pipeline panel server that the browser
@@ -10,34 +9,13 @@ const fs = require("node:fs");
  */
 
 const repoRoot = path.resolve(__dirname, "..");
-const stateDir = process.env.PANEL_STATE
-  ? path.resolve(process.env.PANEL_STATE)
-  : path.join(repoRoot, "workflow-state");
-
-fs.mkdirSync(stateDir, { recursive: true });
-
-function startPanel() {
-  return new Promise((resolve, reject) => {
-    // Load the compiled server module. It is ESM; Electron's main process is
-    // CommonJS by default, so load it dynamically.
-    import(path.join(repoRoot, "dist", "workflow", "server.js"))
-      .then(({ createPanel }) => {
-        const panel = createPanel({ stateDir, port: 0, host: "127.0.0.1" });
-        panel
-          .start()
-          .then((port) => resolve({ port, panel }))
-          .catch(reject);
-      })
-      .catch(reject);
-  });
-}
+const stateDir = resolveStateDir(repoRoot);
 
 app.whenReady().then(async () => {
   let panel;
   try {
-    const started = await startPanel();
+    const started = await startPanel({ repoRoot, stateDir, port: 0 });
     panel = started.panel;
-    const port = started.port;
 
     const win = new BrowserWindow({
       width: 1500,
@@ -50,7 +28,7 @@ app.whenReady().then(async () => {
       webPreferences: { nodeIntegration: false, contextIsolation: true },
     });
 
-    win.loadURL(`http://127.0.0.1:${port}/`);
+    win.loadURL(started.url);
     win.on("closed", () => {
       panel.stop().catch(() => {});
       app.quit();

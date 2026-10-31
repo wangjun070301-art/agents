@@ -26,9 +26,11 @@ const port = Number(arg("--port", "18493"));
 fs.mkdirSync(stateDir, { recursive: true });
 
 const panel = createPanel({ stateDir, port });
-await panel.start();
+// `start()` resolves the port the socket actually bound to. With --port 0 the
+// requested value is meaningless, so print the resolved one.
+const bound = await panel.start();
 console.log(`[panel] state: ${stateDir}`);
-console.log(`[panel] open:  http://127.0.0.1:${port}`);
+console.log(`[panel] open:  http://127.0.0.1:${bound}`);
 console.log("[panel] Ctrl+C to stop");
 
 const shutdown = async () => {

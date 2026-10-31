@@ -319,7 +319,14 @@ export function createPanel(options: ServerOptions): {
     start: () =>
       new Promise((resolve, reject) => {
         server.once("error", reject);
-        server.listen(port, host, () => resolve(port));
+        server.listen(port, host, () => {
+          // Resolve the port the socket actually bound to, not the one we
+          // asked for. With port 0 — which the Electron shell uses so two
+          // instances never collide — the requested value is meaningless and
+          // loading "http://127.0.0.1:0/" would open nothing.
+          const address = server.address();
+          resolve(typeof address === "object" && address ? address.port : port);
+        });
       }),
     stop: () =>
       new Promise((resolve, reject) => {

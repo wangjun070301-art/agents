@@ -126,7 +126,8 @@ Windows 暴露。
 ## 这一轮证明不了什么
 
 1. 被跳过的 4 项在 macOS 上仍然正确——我没有 macOS 环境复跑
-2. `bin/*` 启动器在 Windows 上没有替代品。Windows 用户只能走
-   `node tools/panel.mjs` 或 `npm run app`，这些没有自动化覆盖
+2. ~~`bin/*` 启动器在 Windows 上没有替代品。Windows 用户只能走
+   `node tools/panel.mjs` 或 `npm run app`，这些没有自动化覆盖~~
+   **已补，见 P23**
 3. `launchd` 安装器本身仍是 macOS-only，Windows 没有对应实现
 
