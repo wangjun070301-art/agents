@@ -528,7 +528,14 @@ button:disabled{opacity:.4;cursor:default}
       <p class="label" style="margin-top:18px">任务</p>
       <div id="taskForm"></div>
       <div class="actions"><button class="ghost" id="addTask">+ 加一个任务</button></div>
-      <div class="actions" style="margin-top:18px"><button id="saveProject">保存配置</button></div>
+      <div class="actions" style="margin-top:18px">
+        <button id="saveProject">保存配置</button>
+        <button class="ghost" id="exportJson">导出 JSON</button>
+        <button class="ghost" id="importJson">导入 JSON</button>
+        <input id="importFile" type="file" accept="application/json,.json" hidden>
+      </div>
+      <p class="label" style="margin-top:10px">阶段历史</p>
+      <input id="historyFilter" placeholder="筛选：输入阶段名或门禁号">
       <div class="msg" id="projMsg"></div>
     </div>
   </section>
@@ -574,7 +581,14 @@ async function load(){
   $('count').textContent=String(s.history.length);
   const h=$('history');h.replaceChildren();
   if(!s.history.length)h.append(el('div','empty','还没有阶段变化。'));
-  for(const rec of [...s.history].reverse()){
+  const filtered=[...s.history].reverse().filter(rec=>{
+    if(!historyFilterValue)return true;
+    const from=stageNames[rec.from]||rec.from,to=stageNames[rec.to]||rec.to;
+    const hay=(from+' '+to+' '+(rec.gate||'')+' '+(rec.note||'')).toLowerCase();
+    return hay.includes(historyFilterValue);
+  });
+  if(!filtered.length)h.append(el('div','empty','没有匹配的阶段变化。'));
+  for(const rec of filtered){
     const item=el('div','item');
     const line=el('div',null);line.append(el('b',null,(stageNames[rec.from]||rec.from)+' → '+(stageNames[rec.to]||rec.to)));
     if(rec.gate)line.append(el('span','mono','  '+rec.gate+(rec.verdict&&rec.verdict.passed?' 通过':' 未通过')));
@@ -770,6 +784,37 @@ $('saveProject').onclick=async()=>{
 };
 $('addReq').onclick=()=>{form.requirements.push({req_id:'',statement:'',acceptance:[]});drawForm();};
 $('addTask').onclick=()=>{form.tasks.push({task_id:'',role:'developer',objective:'',allowed_paths:[],deliverables:[],acceptance_ids:[],dependencies:[]});drawForm();};
+$('exportJson').onclick=()=>{
+  const payload={
+    name:$('pName').value.trim(),repo_path:$('pRepo').value.trim(),
+    model:$('pModel').value.trim(),sandbox:$('pSandbox').value.trim()||'bypass',
+    requirements:form.requirements,tasks:form.tasks,
+  };
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+  const a=el('a');a.href=URL.createObjectURL(blob);a.download='project-config.json';a.click();
+  URL.revokeObjectURL(a.href);
+};
+$('importJson').onclick=()=>{$('importFile').click();};
+$('importFile').onchange=async(e)=>{
+  const file=e.target.files[0];
+  if(!file)return;
+  const text=await file.text();
+  const m=$('projMsg');
+  try{
+    const data=JSON.parse(text);
+    if(data.name)$('pName').value=data.name;
+    if(data.repo_path)$('pRepo').value=data.repo_path;
+    if(data.model)$('pModel').value=data.model;
+    if(data.sandbox)$('pSandbox').value=data.sandbox;
+    form.requirements=JSON.parse(JSON.stringify(data.requirements||[]));
+    form.tasks=JSON.parse(JSON.stringify(data.tasks||[]));
+    projectLoaded=false;drawForm();
+    m.className='msg';m.textContent='已导入，检查后点保存';
+  }catch(err){m.className='msg err';m.textContent='导入失败：'+err.message;}
+  e.target.value='';
+};
+let historyFilterValue='';
+$('historyFilter').oninput=(e)=>{historyFilterValue=e.target.value.trim().toLowerCase();};
 drawForm();
 async function post(route,body){
   const r=await fetch(route,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
