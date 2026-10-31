@@ -89,14 +89,23 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 function sessionKey(sessionId: string): string { return crypto.createHash("sha256").update(sessionId).digest("hex"); }
+/**
+ * fsync on a read-only descriptor and fsync on a directory are POSIX-only.
+ * Windows rejects both with EPERM, so the durability barrier degrades there
+ * instead of failing the pump before any native submission has happened.
+ */
+function syncDurably(file: string): void {
+  const fd = fs.openSync(file, process.platform === "win32" ? "r+" : "r");
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  if (process.platform === "win32") return;
+  const directory = fs.openSync(path.dirname(file), "r");
+  try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+}
 function writeWakeIntent(file: string, intent: WakeIntent): void {
   writePrivateJson(file, intent);
   // Force the intent and renamed directory entry to stable storage before native
   // submission. A machine restart must not erase our evidence of possible delivery.
-  const fd = fs.openSync(file, "r");
-  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-  const directory = fs.openSync(path.dirname(file), "r");
-  try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+  syncDurably(file);
 }
 
 /** SQLite CAS avoids two recovering daemons reclaiming the same stale file lock. */
