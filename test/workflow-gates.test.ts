@@ -306,6 +306,25 @@ test("G2 catches a file the developer reported but did not change", () => {
   assert.match(v.blocking.join(" "), /reported but unchanged: src\/extra\.ts/);
 });
 
+test("G2 blocks a claim its own transcript contradicts", () => {
+  const v = gateG2({
+    envelope,
+    result: goodResult,
+    claimDiscrepancies: [
+      { command: "(stdout)", problems: ["the output shows 5 failing, but a pass was claimed"] },
+    ],
+  });
+  assert.equal(v.passed, false);
+  assert.match(v.blocking.join(" "), /claims-match-transcript/);
+  assert.match(v.blocking.join(" "), /5 failing/);
+});
+
+test("G2 stays silent about claims when no transcript was parsed", () => {
+  const v = gateG2({ envelope, result: goodResult });
+  assert.equal(v.passed, true);
+  assert.equal(v.checks.some((c) => c.id === "claims-match-transcript"), false);
+});
+
 // ------------------------------------------------------------------ G3
 test("G3 passes when only Minor and Suggestion remain", () => {
   const v = gateG3({

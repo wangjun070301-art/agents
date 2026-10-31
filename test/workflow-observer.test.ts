@@ -120,3 +120,76 @@ test("an allowlist entry that is a file, not a directory, does not cover sibling
     "a different file is not covered",
   );
 });
+
+// ---------------------------------------------------------------- 越界形态
+
+test("a deleted file outside the allowlist is still a change", () => {
+  const repo = scratchRepo();
+  const before = snapshotWorktree(repo);
+  fs.rmSync(path.join(repo, "b.txt"));
+  const changes = diffSnapshots(before, snapshotWorktree(repo));
+  assert.deepEqual(changes, [{ path: "b.txt", kind: "deleted" }]);
+  assert.deepEqual(changesOutsideAllowed(changes, ["src"]), changes);
+});
+
+test("a deep write outside the allowlist is caught", () => {
+  const repo = scratchRepo();
+  const before = snapshotWorktree(repo);
+  fs.mkdirSync(path.join(repo, "a", "b", "c"), { recursive: true });
+  fs.writeFileSync(path.join(repo, "a", "b", "c", "deep.txt"), "x\n");
+  const changes = diffSnapshots(before, snapshotWorktree(repo));
+  assert.deepEqual(changes, [{ path: "a/b/c/deep.txt", kind: "added" }]);
+  assert.deepEqual(changesOutsideAllowed(changes, ["src"]), changes);
+});
+
+test("a rename shows up as a delete plus an add", () => {
+  const repo = scratchRepo();
+  const before = snapshotWorktree(repo);
+  fs.renameSync(path.join(repo, "a.txt"), path.join(repo, "renamed.txt"));
+  const changes = diffSnapshots(before, snapshotWorktree(repo));
+  assert.deepEqual(changes, [
+    { path: "a.txt", kind: "deleted" },
+    { path: "renamed.txt", kind: "added" },
+  ]);
+  // Renaming out of an allowlist is still a write outside it.
+  assert.equal(changesOutsideAllowed(changes, ["a.txt"]).length, 1);
+});
+
+test("a symlink is reported as a symlink, not followed", () => {
+  const repo = scratchRepo();
+  const before = snapshotWorktree(repo);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "observer-outside-"));
+  fs.writeFileSync(path.join(outside, "secret.txt"), "secret\n");
+  try {
+    fs.symlinkSync(outside, path.join(repo, "link-to-outside"));
+  } catch {
+    // Windows may refuse symlinks without developer mode; skip rather than lie.
+    return;
+  }
+  const changes = diffSnapshots(before, snapshotWorktree(repo));
+  const link = changes.find((c) => c.path === "link-to-outside");
+  assert.ok(link, "the link must appear as a change");
+  assert.equal(link?.symlink, true, "the link must be flagged as a symlink");
+  // A symlink whose own path is outside the allowlist is outside.
+  assert.deepEqual(changesOutsideAllowed(changes, ["src"]), changes);
+});
+
+test("a symlink inside an allowlist is flagged so a caller can still reject it", () => {
+  const repo = scratchRepo();
+  fs.mkdirSync(path.join(repo, "src"));
+  fs.writeFileSync(path.join(repo, "src", "real.txt"), "real\n");
+  const before = snapshotWorktree(repo);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "observer-outside2-"));
+  try {
+    fs.symlinkSync(outside, path.join(repo, "src", "escape"));
+  } catch {
+    return;
+  }
+  const changes = diffSnapshots(before, snapshotWorktree(repo));
+  const link = changes.find((c) => c.path === "src/escape");
+  assert.ok(link);
+  assert.equal(link?.symlink, true);
+  // Path-wise it is inside src/, so containment alone would pass it. The
+  // symlink flag is what lets a gate refuse it anyway.
+  assert.deepEqual(changesOutsideAllowed(changes, ["src"]), []);
+});

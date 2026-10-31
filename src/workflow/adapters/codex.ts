@@ -14,6 +14,7 @@ import type {
   WorkflowAdapter,
 } from "../adapters.js";
 import { diffSnapshots, snapshotWorktree, type ObservedChange, type WorktreeSnapshot } from "../observer.js";
+import { parseTestOutput, reconcileClaimedWithParsed } from "../test-output.js";
 
 export type SandboxMode = "read-only" | "workspace-write" | "bypass";
 
@@ -61,6 +62,12 @@ interface Observation {
   before: WorktreeSnapshot;
   after: WorktreeSnapshot;
   changes: ObservedChange[];
+}
+
+/** A claim the child made that its own command output contradicts. */
+export interface ClaimDiscrepancy {
+  command: string;
+  problems: string[];
 }
 
 export class CodexAdapterError extends Error {
@@ -358,6 +365,7 @@ export class CodexAdapter implements WorkflowAdapter {
   private readonly sessions = new Map<string, { sessionId: string; envelope: TaskEnvelope }>();
   private readonly evidence = new Map<string, EvidenceBundle>();
   private readonly observations = new Map<string, Observation>();
+  private readonly discrepancies = new Map<string, ClaimDiscrepancy[]>();
   private readonly running = new Map<string, AbortController>();
 
   constructor(private readonly options: CodexAdapterOptions) {
@@ -572,6 +580,18 @@ export class CodexAdapter implements WorkflowAdapter {
       };
     }
 
+    // Check the claimed test results against the transcript the child actually
+    // produced. A claim with no supporting output is not evidence.
+    const mismatches: ClaimDiscrepancy[] = [];
+    if (checked.data.test_results.length > 0) {
+      const parsed = parseTestOutput(outcome.stdout);
+      const problems = reconcileClaimedWithParsed(checked.data.test_results, parsed);
+      if (problems.length) {
+        mismatches.push({ command: "(stdout)", problems });
+      }
+    }
+    if (mismatches.length) this.discrepancies.set(envelope.task_id, mismatches);
+
     this.evidence.set(envelope.task_id, {
       task_id: envelope.task_id,
       // The observed list when we have one: it is evidence, not a claim.
@@ -615,5 +635,10 @@ export class CodexAdapter implements WorkflowAdapter {
    */
   observedChanges(taskId: string): ObservedChange[] | undefined {
     return this.observations.get(taskId)?.changes;
+  }
+
+  /** Claims the child's own output contradicts. Empty when they agree. */
+  claimDiscrepancies(taskId: string): ClaimDiscrepancy[] {
+    return this.discrepancies.get(taskId) ?? [];
   }
 }

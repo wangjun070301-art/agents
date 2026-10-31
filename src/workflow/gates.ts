@@ -55,6 +55,11 @@ export interface GateInput {
   reviewFindings?: Array<{ severity: "Blocker" | "Major" | "Minor" | "Suggestion"; resolved: boolean }>;
   /** Per-AC verification outcome for the integrated build. */
   verifications?: VerificationRow[];
+  /**
+   * Claims the developer's own command output contradicts. Supplied by the
+   * adapter that parsed the transcript; a gate cannot derive this itself.
+   */
+  claimDiscrepancies?: Array<{ command: string; problems: string[] }>;
 }
 
 /**
@@ -491,6 +496,20 @@ export function gateG2(input: GateInput): GateVerdict {
             ]
               .filter(Boolean)
               .join("; "),
+          ),
+    );
+  }
+
+  // A claim the transcript contradicts is a dishonest report, not merely an
+  // incomplete one, so G2 blocks regardless of how tidy the rest looks.
+  if (input.claimDiscrepancies) {
+    const bad = input.claimDiscrepancies.filter((d) => d.problems.length > 0);
+    checks.push(
+      bad.length === 0
+        ? ok("claims-match-transcript", "reported test results match the command output")
+        : no(
+            "claims-match-transcript",
+            bad.map((d) => `${d.command}: ${d.problems.join("; ")}`).join(" | "),
           ),
     );
   }

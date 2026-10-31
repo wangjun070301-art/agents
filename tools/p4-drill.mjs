@@ -11,7 +11,12 @@
  * A gate suite that passes all of these has proved nothing. This drill fails
  * the build when a gate lets one through.
  *
- * Usage: node tools/p4-drill.mjs [--json]
+ * Usage: node tools/p4-drill.mjs [--json] [--repeat N]
+ *
+ * With --repeat, every scenario runs N times and the report is a rate, not a
+ * single pass. A gate chain that catches a bad delivery nine times out of ten
+ * is not a gate chain; the exit code is non-zero unless every repetition
+ * behaved as required.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +29,12 @@ import { evaluateAllGates } from "../dist/workflow/gates.js";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const jsonOut = process.argv.includes("--json");
+const repeatArg = process.argv.indexOf("--repeat");
+const repeat = repeatArg > -1 ? Number(process.argv[repeatArg + 1]) : 1;
+if (!Number.isInteger(repeat) || repeat < 1) {
+  console.error("--repeat must be a positive integer");
+  process.exit(2);
+}
 const results = [];
 
 const requirements = requirementsSchema.parse([
@@ -118,17 +129,43 @@ function baseline() {
  * declares explicitly in `alsoAllowed`.
  */
 function check(id, name, input, expectedBlocked, alsoAllowed = []) {
-  const verdicts = evaluateAllGates(input);
-  const blocked = verdicts.filter((v) => !v.passed).map((v) => v.gate);
-  const unexpected = blocked.filter((gate) => !expectedBlocked.includes(gate) && !alsoAllowed.includes(gate));
-  const missing = expectedBlocked.filter((gate) => !blocked.includes(gate));
-  const ok = unexpected.length === 0 && missing.length === 0;
+  // evaluateAllGates is pure, so repetition only catches non-determinism the
+  // gates might have introduced (ordering, shared mutable state, timers).
+  // It is cheap insurance against exactly that.
+  let passes = 0;
+  let lastBlocked = [];
+  let lastReason = "";
+  for (let i = 0; i < repeat; i += 1) {
+    const verdicts = evaluateAllGates(input);
+    const blocked = verdicts.filter((v) => !v.passed).map((v) => v.gate);
+    const unexpected = blocked.filter(
+      (gate) => !expectedBlocked.includes(gate) && !alsoAllowed.includes(gate),
+    );
+    const missing = expectedBlocked.filter((gate) => !blocked.includes(gate));
+    lastBlocked = blocked;
+    if (unexpected.length === 0 && missing.length === 0) {
+      passes += 1;
+    } else {
+      lastReason = [
+        missing.length ? `did not block: ${missing.join(",")}` : "",
+        unexpected.length ? `blocked for the wrong reason: ${unexpected.join(",")}` : "",
+      ]
+        .filter(Boolean)
+        .join("; ");
+    }
+  }
+  const ok = passes === repeat;
+  const rate = repeat > 1 ? `${passes}/${repeat}` : "";
   const parts = [];
-  if (missing.length) parts.push(`did not block: ${missing.join(",")}`);
-  if (unexpected.length) parts.push(`blocked for the wrong reason: ${unexpected.join(",")}`);
-  const detail = parts.length
-    ? `expected ${expectedBlocked.join(",") || "(none)"}; actually blocked ${blocked.join(",") || "(none)"}; ${parts.join("; ")}`
-    : `expected ${expectedBlocked.join(",") || "(none)"}; actually blocked ${blocked.join(",") || "(none)"}`;
+  if (lastReason) parts.push(lastReason);
+  const detail = [
+    `expected ${expectedBlocked.join(",") || "(none)"}`,
+    `actually blocked ${lastBlocked.join(",") || "(none)"}`,
+    rate ? `rate ${rate}` : "",
+    ...parts,
+  ]
+    .filter(Boolean)
+    .join("; ");
   results.push({ id, name, ok, detail });
   if (!jsonOut) {
     console.log(`${ok ? "PASS" : "FAIL"}  [${id}] ${name}`);
