@@ -71,6 +71,20 @@ const manualTask = taskEnvelopeSchema.parse({
 });
 const plan = [envelope, manualTask];
 
+/** A complete, honest delivery record used by the gates that need one. */
+const deliveredArtifact = "build-7d4e880";
+const acceptance = {
+  by: "He",
+  at: "2026-10-31T14:10:00Z",
+  note: "read the parser output and the fixture result",
+  artifact: deliveredArtifact,
+  accepted_ac_ids: ["AC-1", "AC-2"],
+};
+const verifications = [
+  { ac_id: "AC-1", outcome: "passed" as const, evidence: "npm test exit 0", at: "2026-10-31T13:00:00Z" },
+  { ac_id: "AC-2", outcome: "passed" as const, evidence: "He read the output at 14:02", at: "2026-10-31T14:02:00Z" },
+];
+
 // ------------------------------------------------------------------ G0
 test("G0 passes a requirement set where every criterion names its decider", () => {
   const v = gateG0({ requirements, envelope });
@@ -155,6 +169,74 @@ test("G1 blocks when a requirement has no task claiming it", () => {
   assert.match(v.blocking.join(" "), /unclaimed: AC-2/);
 });
 
+test("G1 blocks a parent/child write overlap, not just an identical string", () => {
+  const wide = taskEnvelopeSchema.parse({ ...envelope, task_id: "T-W", allowed_paths: ["src"] });
+  const narrow = taskEnvelopeSchema.parse({ ...envelope, task_id: "T-N", allowed_paths: ["src/parser.ts"] });
+  const v = gateG1({ tasks: [wide, narrow], requirements });
+  assert.equal(v.passed, false);
+  assert.match(v.blocking.join(" "), /share src ~ src\/parser\.ts/);
+});
+
+test("G1 treats differently written but equal paths as a collision", () => {
+  const a = taskEnvelopeSchema.parse({ ...envelope, task_id: "T-A", allowed_paths: ["./src"] });
+  const b = taskEnvelopeSchema.parse({ ...envelope, task_id: "T-B", allowed_paths: ["Src"] });
+  const v = gateG1({ tasks: [a, b], requirements });
+  assert.equal(v.passed, false);
+});
+
+test("G1 blocks two tasks that deliver the same file even when their allowlists differ", () => {
+  const a = taskEnvelopeSchema.parse({ ...envelope, task_id: "T-A", deliverables: ["src/parser.ts"] });
+  const b = taskEnvelopeSchema.parse({
+    ...envelope,
+    task_id: "T-B",
+    deliverables: ["src/parser.ts"],
+    allowed_paths: ["src/parser.ts"],
+  });
+  const v = gateG1({ tasks: [a, b], requirements });
+  assert.equal(v.passed, false);
+  assert.match(v.blocking.join(" "), /both deliver src\/parser\.ts/);
+});
+
+test("G1 blocks a dependency cycle instead of treating it as ordering", () => {
+  const a = taskEnvelopeSchema.parse({ ...envelope, task_id: "T-A", dependencies: ["T-B"] });
+  const b = taskEnvelopeSchema.parse({ ...envelope, task_id: "T-B", dependencies: ["T-A"] });
+  const v = gateG1({ tasks: [a, b], requirements });
+  assert.equal(v.passed, false);
+  assert.match(v.blocking.join(" "), /cycle:/);
+});
+
+test("G1 honours transitive ordering when judging collisions", () => {
+  const a = taskEnvelopeSchema.parse({
+    ...envelope,
+    task_id: "T-A",
+    allowed_paths: ["src"],
+    acceptance_ids: ["AC-1"],
+  });
+  const b = taskEnvelopeSchema.parse({
+    ...envelope,
+    task_id: "T-B",
+    dependencies: ["T-A"],
+    allowed_paths: ["src"],
+    acceptance_ids: ["AC-2"],
+  });
+  const c = taskEnvelopeSchema.parse({
+    ...envelope,
+    task_id: "T-C",
+    dependencies: ["T-B"],
+    allowed_paths: ["src"],
+    acceptance_ids: ["AC-1"],
+  });
+  const v = gateG1({ tasks: [a, b, c], requirements });
+  // A and C are ordered through B, so neither pair is a real parallel clash.
+  assert.equal(v.passed, true);
+});
+
+test("G1 blocks when it has no requirement set to check coverage against", () => {
+  const v = gateG1({ tasks: plan });
+  assert.equal(v.passed, false);
+  assert.match(v.blocking.join(" "), /no requirement set/);
+});
+
 // ------------------------------------------------------------------ G2
 test("G2 passes a result that reconciles with its envelope", () => {
   const v = gateG2({ envelope, result: goodResult });
@@ -193,6 +275,37 @@ test("G2 blocks when the developer admits something is unresolved", () => {
   assert.match(v.blocking.join(" "), /second fixture/);
 });
 
+test("G2 blocks a tidy partial result, not just a messy one", () => {
+  const tidy = taskResultSchema.parse({
+    task_id: "T-1",
+    status: "partial",
+    summary: "most of it works",
+    changed_files: ["src/parser.ts"],
+    commands: [{ command: "npm test", exit_code: 0 }],
+    test_results: [{ name: "parser", outcome: "passed", acceptance_ids: ["AC-1"] }],
+  });
+  const v = gateG2({ envelope, result: tidy });
+  assert.equal(v.passed, false);
+  assert.match(v.blocking.join(" "), /status is partial, not succeeded/);
+});
+
+test("G2 catches a change the developer did not report", () => {
+  const v = gateG2({
+    envelope,
+    result: goodResult,
+    changedFiles: ["src/parser.ts", "README.md"],
+  });
+  assert.equal(v.passed, false);
+  assert.match(v.blocking.join(" "), /changed but unreported: README\.md/);
+});
+
+test("G2 catches a file the developer reported but did not change", () => {
+  const inflated = taskResultSchema.parse({ ...goodResult, changed_files: ["src/parser.ts", "src/extra.ts"] });
+  const v = gateG2({ envelope, result: inflated, changedFiles: ["src/parser.ts"] });
+  assert.equal(v.passed, false);
+  assert.match(v.blocking.join(" "), /reported but unchanged: src\/extra\.ts/);
+});
+
 // ------------------------------------------------------------------ G3
 test("G3 passes when only Minor and Suggestion remain", () => {
   const v = gateG3({
@@ -217,6 +330,19 @@ test("G3 blocks when no review was supplied at all", () => {
   const v = gateG3({});
   assert.equal(v.passed, false);
   assert.match(v.blocking.join(" "), /no review findings/);
+});
+
+test("G3 distinguishes 'reviewed and clean' from 'not reviewed'", () => {
+  const empty = gateG3({ reviewFindings: [] });
+  assert.equal(empty.passed, true, "an explicit empty review is a real verdict");
+  const missing = gateG3({});
+  assert.equal(missing.passed, false, "a missing review is not a clean review");
+});
+
+test("G3 blocks a finding whose severity is not one of the four", () => {
+  const v = gateG3({ reviewFindings: [{ severity: "blocker" as never, resolved: false }] });
+  assert.equal(v.passed, false);
+  assert.match(v.blocking.join(" "), /unknown severity/);
 });
 
 // ------------------------------------------------------------------ G4
@@ -264,15 +390,53 @@ test("G4 blocks a pass that cites no evidence", () => {
   assert.match(v.blocking.join(" "), /passed without evidence: AC-1/);
 });
 
-// ------------------------------------------------------------------ G5
-test("G5 passes with verified evidence and a recorded human acceptance", () => {
-  const v = gateG5({
+test("G4 rejects evidence that is a shrug rather than a record", () => {
+  for (const junk of ["n/a", "N/A", "none", "TBD", "-", "...", "?", "\u200b"]) {
+    const v = gateG4({
+      requirements,
+      verifications: [
+        { ac_id: "AC-1", outcome: "passed", evidence: junk },
+        { ac_id: "AC-2", outcome: "passed", evidence: "He read the output at 14:02" },
+      ],
+    });
+    assert.equal(v.passed, false, `evidence ${JSON.stringify(junk)} must not count`);
+  }
+});
+
+test("G4 blocks duplicate verification rows instead of taking the last one", () => {
+  const v = gateG4({
+    requirements,
+    verifications: [
+      { ac_id: "AC-1", outcome: "failed", evidence: "npm test exit 1" },
+      { ac_id: "AC-1", outcome: "passed", evidence: "npm test exit 0" },
+      { ac_id: "AC-2", outcome: "passed", evidence: "He read the output" },
+    ],
+  });
+  assert.equal(v.passed, false);
+  assert.match(v.blocking.join(" "), /duplicated: AC-1/);
+});
+
+test("G4 blocks a verification for a criterion nobody defined", () => {
+  const v = gateG4({
     requirements,
     verifications: [
       { ac_id: "AC-1", outcome: "passed", evidence: "npm test exit 0" },
       { ac_id: "AC-2", outcome: "passed", evidence: "He read the output" },
+      { ac_id: "AC-77", outcome: "passed", evidence: "invented" },
     ],
-    recorded: { G5: { by: "He", at: "2026-10-31T14:10:00Z", note: "looks right" } },
+  });
+  assert.equal(v.passed, false);
+  assert.match(v.blocking.join(" "), /unknown criteria: AC-77/);
+});
+
+// ------------------------------------------------------------------ G5
+test("G5 passes with verified evidence and a recorded human acceptance", () => {
+  const v = gateG5({
+    requirements,
+    envelope,
+    deliveredArtifact,
+    verifications,
+    recorded: { G5: acceptance },
   });
   assert.equal(v.passed, true);
 });
@@ -280,10 +444,8 @@ test("G5 passes with verified evidence and a recorded human acceptance", () => {
 test("G5 blocks without a human acceptance, even when G4 passes", () => {
   const v = gateG5({
     requirements,
-    verifications: [
-      { ac_id: "AC-1", outcome: "passed", evidence: "npm test exit 0" },
-      { ac_id: "AC-2", outcome: "passed", evidence: "He read the output" },
-    ],
+    deliveredArtifact,
+    verifications,
   });
   assert.equal(v.passed, false);
   assert.match(v.blocking.join(" "), /no recorded human acceptance/);
@@ -292,8 +454,10 @@ test("G5 blocks without a human acceptance, even when G4 passes", () => {
 test("G5 inherits G4's failures rather than shipping an unverified build", () => {
   const v = gateG5({
     requirements,
-    verifications: [{ ac_id: "AC-1", outcome: "passed", evidence: "npm test" }],
-    recorded: { G5: { by: "He", at: "now", note: "ship it" } },
+    envelope,
+    deliveredArtifact,
+    verifications: [{ ac_id: "AC-1", outcome: "passed", evidence: "npm test", at: "2026-10-31T13:00:00Z" }],
+    recorded: { G5: acceptance },
   });
   assert.equal(v.passed, false);
   assert.match(v.blocking.join(" "), /g4:/);
@@ -302,11 +466,10 @@ test("G5 inherits G4's failures rather than shipping an unverified build", () =>
 test("G5 blocks a blank acceptance note", () => {
   const v = gateG5({
     requirements,
-    verifications: [
-      { ac_id: "AC-1", outcome: "passed", evidence: "npm test exit 0" },
-      { ac_id: "AC-2", outcome: "passed", evidence: "He read the output" },
-    ],
-    recorded: { G5: { by: "He", at: "now", note: "  " } },
+    envelope,
+    deliveredArtifact,
+    verifications,
+    recorded: { G5: { ...acceptance, note: "  " } },
   });
   assert.equal(v.passed, false);
 });
@@ -314,11 +477,12 @@ test("G5 blocks a blank acceptance note", () => {
 test("G5 rejects a placeholder acceptance that names nobody and nothing", () => {
   const v = gateG5({
     requirements,
-    verifications: [
-      { ac_id: "AC-1", outcome: "passed", evidence: "npm test exit 0" },
-      { ac_id: "AC-2", outcome: "passed", evidence: "He read the output" },
-    ],
-    recorded: { G5: { by: "x", at: "now", note: "ok" } },
+    envelope,
+    deliveredArtifact,
+    verifications,
+    recorded: {
+      G5: { by: "x", at: "now", note: "ok", artifact: deliveredArtifact, accepted_ac_ids: ["AC-1", "AC-2"] },
+    },
   });
   assert.equal(v.passed, false);
   assert.match(v.blocking.join(" "), /not a name/);
@@ -326,14 +490,99 @@ test("G5 rejects a placeholder acceptance that names nobody and nothing", () => 
   assert.match(v.blocking.join(" "), /too short/);
 });
 
-test("G5 rejects an acceptance whose note says nothing concrete", () => {
-  const v = gateG5({
+test("G5 requires the acceptance to name the artifact it accepts", () => {
+  const base = {
     requirements,
+    deliveredArtifact,
     verifications: [
       { ac_id: "AC-1", outcome: "passed", evidence: "npm test exit 0" },
       { ac_id: "AC-2", outcome: "passed", evidence: "He read the output" },
     ],
-    recorded: { G5: { by: "He", at: "2026-10-31T14:10:00Z", note: "it works fine and looks good to me" } },
+  };
+  const noArtifact = gateG5({
+    ...base,
+    recorded: {
+      G5: {
+        by: "He",
+        at: "2026-10-31T14:10:00Z",
+        note: "read the parser output",
+        artifact: "",
+        accepted_ac_ids: ["AC-1", "AC-2"],
+      },
+    },
+  });
+  assert.equal(noArtifact.passed, false);
+  assert.match(noArtifact.blocking.join(" "), /does not name the artifact/);
+
+  const wrongArtifact = gateG5({
+    ...base,
+    envelope,
+    recorded: {
+      G5: {
+        by: "He",
+        at: "2026-10-31T14:10:00Z",
+        note: "read the parser output",
+        artifact: "some-other-build",
+        accepted_ac_ids: ["AC-1", "AC-2"],
+      },
+    },
+  });
+  assert.equal(wrongArtifact.passed, false);
+  assert.match(wrongArtifact.blocking.join(" "), /names some-other-build but the delivered artifact is build-7d4e880/);
+});
+
+test("G5 requires every criterion to be signed off", () => {
+  const v = gateG5({
+    requirements,
+    deliveredArtifact,
+    verifications: [
+      { ac_id: "AC-1", outcome: "passed", evidence: "npm test exit 0" },
+      { ac_id: "AC-2", outcome: "passed", evidence: "He read the output" },
+    ],
+    recorded: {
+      G5: {
+        by: "He",
+        at: "2026-10-31T14:10:00Z",
+        note: "read the parser output",
+        artifact: deliveredArtifact,
+        accepted_ac_ids: ["AC-1"],
+      },
+    },
+  });
+  assert.equal(v.passed, false);
+  assert.match(v.blocking.join(" "), /leaves criteria unsigned: AC-2/);
+});
+
+test("G5 rejects an acceptance dated before the last verification", () => {
+  const v = gateG5({
+    requirements,
+    envelope,
+    deliveredArtifact,
+    verifications: [
+      { ac_id: "AC-1", outcome: "passed", evidence: "npm test exit 0", at: "2026-10-31T15:00:00Z" },
+      { ac_id: "AC-2", outcome: "passed", evidence: "He read the output", at: "2026-10-31T15:05:00Z" },
+    ],
+    recorded: {
+      G5: {
+        by: "He",
+        at: "2026-10-31T14:00:00Z",
+        note: "read the parser output",
+        artifact: deliveredArtifact,
+        accepted_ac_ids: ["AC-1", "AC-2"],
+      },
+    },
+  });
+  assert.equal(v.passed, false);
+  assert.match(v.blocking.join(" "), /dated before the last verification/);
+});
+
+test("G5 rejects an acceptance whose note says nothing concrete", () => {
+  const v = gateG5({
+    requirements,
+    envelope,
+    deliveredArtifact,
+    verifications,
+    recorded: { G5: { ...acceptance, note: "it works fine and looks good to me" } },
   });
   // "works" is four letters, so this note does name something; it must pass.
   assert.equal(v.passed, true);
@@ -365,14 +614,13 @@ test("a fully evidenced project passes every gate", () => {
   const all = evaluateAllGates({
     requirements,
     envelope,
+    deliveredArtifact,
     result: goodResult,
     tasks: plan,
+    changedFiles: ["src/parser.ts"],
     reviewFindings: [{ severity: "Minor", resolved: false }],
-    verifications: [
-      { ac_id: "AC-1", outcome: "passed", evidence: "npm test exit 0" },
-      { ac_id: "AC-2", outcome: "passed", evidence: "He read the output" },
-    ],
-    recorded: { G5: { by: "He", at: "2026-10-31T14:10:00Z", note: "looks right" } },
+    verifications,
+    recorded: { G5: acceptance },
   });
   for (const v of all) {
     assert.equal(v.passed, true, `${v.gate} blocked: ${v.blocking.join("; ")}`);

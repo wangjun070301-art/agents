@@ -28,6 +28,24 @@ const explicitMap = (() => {
     return {};
   }
 })();
+
+/**
+ * Claude Code asks for Anthropic-shaped ids. The gateway only knows its own
+ * catalog names. Without an explicit map, bind the three well-known aliases to
+ * the best matching catalog entry so a bare shim still works.
+ */
+function deriveAliasMap(ids) {
+  const pick = (pattern) => ids.find((id) => pattern.test(id));
+  const fast = pick(/V4\.1-Flash/i) ?? pick(/flash/i) ?? ids[0];
+  const strong = pick(/V4-Pro/i) ?? pick(/pro/i) ?? fast;
+  if (!fast) return {};
+  return {
+    "claude-haiku-4-5": fast,
+    "claude-sonnet-4-5": fast,
+    "claude-opus-4-5": strong,
+    ...explicitMap,
+  };
+}
 const logRequests = process.env.SHIM_LOG_REQUESTS === "1";
 
 if (!upstream || !token) {
@@ -61,6 +79,9 @@ async function refreshIndex() {
   const parsed = JSON.parse(body.text);
   knownIds = (parsed.data ?? parsed.models ?? []).map((m) => m.id).filter(Boolean);
   index = new Map(knownIds.map((id) => [normalize(id), id]));
+  for (const [alias, target] of Object.entries(deriveAliasMap(knownIds))) {
+    if (!index.has(normalize(alias))) index.set(normalize(alias), target);
+  }
   return knownIds;
 }
 

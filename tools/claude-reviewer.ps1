@@ -15,7 +15,7 @@ param(
   [Parameter(Mandatory = $true, Position = 0)]
   [string] $Prompt,
 
-  [string] $Model = 'claude-sonnet-4-5',
+  [string] $Model = 'claude-haiku-4-5',
 
   [string[]] $AllowedTools = @('Read', 'Bash', 'Grep', 'Glob'),
 
