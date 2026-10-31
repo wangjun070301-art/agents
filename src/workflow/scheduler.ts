@@ -249,6 +249,11 @@ function buildGateInput(state: ProjectState): GateInput {
     result: state.result,
     deliveredArtifact: state.deliveredArtifact,
     changedFiles: state.changedFiles,
+    // These three are the gate inputs that only exist after their stage has
+    // run. Dropping them silently made G3 and G4 reject work that was done.
+    reviewFindings: state.reviewFindings,
+    verifications: state.verifications,
+    recorded: state.recorded,
     claimDiscrepancies: state.claimDiscrepancies,
   };
   return input;

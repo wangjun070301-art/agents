@@ -170,6 +170,69 @@ test("advanceStage refuses when the combined evidence does not clear the gate", 
   assert.equal(pipeline.stage, "IMPLEMENT");
 });
 
+test("advanceStage forwards review findings to G3 instead of dropping them", () => {
+  const pipeline = new Pipeline("REVIEW", fixedClock);
+  const scheduler = new Scheduler({
+    adapter: scriptedAdapter({}),
+    requirements,
+    pipeline,
+    now: fixedClock,
+  });
+  // An explicit empty review means "reviewed and clean". If advanceStage
+  // dropped the field, G3 would see undefined and report "no review supplied".
+  const outcome = scheduler.advanceStage("VERIFY", { reviewFindings: [] });
+  assert.equal(outcome.ok, true, outcome.refused?.detail);
+  assert.equal(outcome.record?.gate, "G3");
+});
+
+test("advanceStage forwards verifications to G4 instead of dropping them", () => {
+  const pipeline = new Pipeline("VERIFY", fixedClock);
+  const scheduler = new Scheduler({
+    adapter: scriptedAdapter({}),
+    requirements,
+    pipeline,
+    now: fixedClock,
+  });
+  const outcome = scheduler.advanceStage("INTEGRATE", {
+    requirements,
+    verifications: [
+      { ac_id: "AC-1", outcome: "passed", evidence: "node --test exit 0", at: "2026-10-31T13:00:00Z" },
+      { ac_id: "AC-2", outcome: "passed", evidence: "He read the output", at: "2026-10-31T13:05:00Z" },
+    ],
+  });
+  assert.equal(outcome.ok, true, outcome.refused?.detail);
+  assert.equal(outcome.record?.gate, "G4");
+});
+
+test("advanceStage forwards a recorded acceptance to G5 instead of dropping it", () => {
+  const pipeline = new Pipeline("ACCEPT", fixedClock);
+  const scheduler = new Scheduler({
+    adapter: scriptedAdapter({}),
+    requirements,
+    pipeline,
+    now: fixedClock,
+  });
+  const outcome = scheduler.advanceStage("DELIVER", {
+    requirements,
+    deliveredArtifact: "build-abc",
+    verifications: [
+      { ac_id: "AC-1", outcome: "passed", evidence: "node --test exit 0", at: "2026-10-31T13:00:00Z" },
+      { ac_id: "AC-2", outcome: "passed", evidence: "He read the output", at: "2026-10-31T13:05:00Z" },
+    ],
+    recorded: {
+      G5: {
+        by: "He",
+        at: "2026-10-31T13:20:00Z",
+        note: "read the test output and the diff",
+        artifact: "build-abc",
+        accepted_ac_ids: ["AC-1", "AC-2"],
+      },
+    },
+  });
+  assert.equal(outcome.ok, true, outcome.refused?.detail);
+  assert.equal(outcome.record?.gate, "G5");
+});
+
 test("a refused task is retried and the retry sees the refusal", async () => {
   const thin = taskResultSchema.parse({
     task_id: "T-1",
