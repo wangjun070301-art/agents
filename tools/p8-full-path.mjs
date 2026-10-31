@@ -171,11 +171,18 @@ advance("IMPLEMENT", {}, "dispatched");
 const run = await scheduler.runTask(devTask);
 const last = run.attempts.at(-1);
 note(`[p8] child run: ok=${run.ok} attempts=${run.attempts.length} observed=${JSON.stringify(last?.observedChanges ?? [])}`);
+if (!run.ok) {
+  // The scheduler reports an adapter error as a failure, not a refusal. Printing
+  // it here is the difference between a diagnosable drill and a silent one.
+  note(`[p8] child run failure: ${run.failure?.reason} — ${run.failure?.detail}`);
+}
 record(
   "G2-run",
   "the real child produced evidence the adapter could collect",
   run.ok && (last?.observedChanges ?? []).includes("src/calc.js"),
-  run.ok ? `observed ${JSON.stringify(last?.observedChanges ?? [])}` : `refused: ${last?.refusal}`,
+  run.ok
+    ? `observed ${JSON.stringify(last?.observedChanges ?? [])}`
+    : `${run.failure?.reason}: ${run.failure?.detail}`,
 );
 const g2 = advance(
   "REVIEW",

@@ -55,6 +55,13 @@ export interface CodexAdapterOptions {
    * Enabled by default; a test can turn it off to keep runs hermetic.
    */
   observeWorktree?: boolean;
+  /**
+   * How many times to re-run a child whose reply could not be parsed as a
+   * task result. The model occasionally answers with prose instead of the
+   * object, which is a formatting failure, not a task failure: re-running is
+   * cheaper than failing the whole pipeline on it. Defaults to 2 retries.
+   */
+  formatRetries?: number;
 }
 
 /** What the adapter saw, kept separate from what the child claimed. */
@@ -473,6 +480,33 @@ export class CodexAdapter implements WorkflowAdapter {
   }
 
   async execute(envelope: TaskEnvelope, options?: ExecuteOptions): Promise<TaskResult> {
+    const attempts = Math.max(1, (this.options.formatRetries ?? 2) + 1);
+    let lastError: CodexAdapterError | undefined;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        return await this.executeOnce(envelope, options, attempt);
+      } catch (error) {
+        // Only a formatting failure is worth retrying. A timeout, a missing
+        // binary or a sandbox refusal would fail the same way again.
+        if (
+          error instanceof CodexAdapterError &&
+          error.kind === "result-invalid" &&
+          attempt < attempts
+        ) {
+          lastError = error;
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastError ?? new CodexAdapterError("result-invalid", "child produced no usable result");
+  }
+
+  private async executeOnce(
+    envelope: TaskEnvelope,
+    options: ExecuteOptions | undefined,
+    attempt: number,
+  ): Promise<TaskResult> {
     const controller = new AbortController();
     this.running.set(envelope.task_id, controller);
     const signal = options?.signal

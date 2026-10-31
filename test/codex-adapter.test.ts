@@ -242,6 +242,7 @@ test("a result file with no JSON object at all is rejected", async () => {
     codexPath: process.execPath,
     codexHome: home,
     model: "m",
+    formatRetries: 0,
     spawn: async () => {
       const runDir = path.join(home, "runs", envelope.task_id);
       fs.mkdirSync(runDir, { recursive: true });
@@ -254,6 +255,81 @@ test("a result file with no JSON object at all is rejected", async () => {
     (error: unknown) =>
       error instanceof CodexAdapterError && error.kind === "result-invalid",
   );
+});
+
+test("a prose reply is retried, and a good reply on the second try is accepted", async () => {
+  const home = scratchHome();
+  let calls = 0;
+  const adapter = new CodexAdapter({
+    codexPath: process.execPath,
+    codexHome: home,
+    model: "m",
+    formatRetries: 1,
+    spawn: async () => {
+      calls += 1;
+      const runDir = path.join(home, "runs", envelope.task_id);
+      fs.mkdirSync(runDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(runDir, "result.json"),
+        calls === 1
+          ? "[R]\n\nbrief received. did the work.\n"
+          : JSON.stringify({
+              task_id: "T-1",
+              status: "partial",
+              summary: "second try produced a result",
+              changed_files: ["src/x.ts"],
+            }),
+        "utf8",
+      );
+      return { code: 0, stdout: "", stderr: "", timedOut: false };
+    },
+  });
+  const result = await adapter.execute(envelope);
+  assert.equal(calls, 2, "the prose reply must have triggered exactly one retry");
+  assert.equal(result.status, "partial");
+});
+
+test("retries are bounded: a child that never produces JSON still fails", async () => {
+  const home = scratchHome();
+  let calls = 0;
+  const adapter = new CodexAdapter({
+    codexPath: process.execPath,
+    codexHome: home,
+    model: "m",
+    formatRetries: 2,
+    spawn: async () => {
+      calls += 1;
+      const runDir = path.join(home, "runs", envelope.task_id);
+      fs.mkdirSync(runDir, { recursive: true });
+      fs.writeFileSync(path.join(runDir, "result.json"), "[R]\n\nprose again.\n", "utf8");
+      return { code: 0, stdout: "", stderr: "", timedOut: false };
+    },
+  });
+  await assert.rejects(
+    () => adapter.execute(envelope),
+    (error: unknown) => error instanceof CodexAdapterError && error.kind === "result-invalid",
+  );
+  assert.equal(calls, 3, "formatRetries=2 means three attempts, then give up");
+});
+
+test("a timeout is not retried, because it would fail the same way", async () => {
+  const home = scratchHome();
+  let calls = 0;
+  const adapter = new CodexAdapter({
+    codexPath: process.execPath,
+    codexHome: home,
+    model: "m",
+    formatRetries: 2,
+    spawn: async () => {
+      calls += 1;
+      return { code: -1, stdout: "", stderr: "", timedOut: true };
+    },
+  });
+  await assert.rejects(
+    () => adapter.execute(envelope),
+    (error: unknown) => error instanceof CodexAdapterError && error.kind === "timeout",
+  );
+  assert.equal(calls, 1, "a timeout must not be retried");
 });
 
 test("a child that claims success while exiting non-zero becomes blocked", async () => {
