@@ -26,7 +26,7 @@ export interface TaskAttempt {
 export interface TaskFailure {
   taskId: string;
   attempts: TaskAttempt[];
-  reason: "gate-refused" | "adapter-error" | "attempts-exhausted" | "no-progress";
+  reason: "gate-refused" | "adapter-error" | "attempts-exhausted" | "no-progress" | "cancelled";
   detail: string;
   /** True when the fault was transient and another attempt could help. */
   retryable?: boolean;
@@ -56,6 +56,18 @@ export interface SchedulerOptions {
    * blocking the whole pipeline for it would be wrong.
    */
   blockOnExhaustion?: boolean;
+  /**
+   * Called with the id of the task that is about to run. The panel uses it to
+   * point its cancel button at the child that is actually alive: during a plan
+   * the running task changes, and a cancel aimed at "PLAN" would hit nothing.
+   */
+  onTaskStart?: (taskId: string) => void;
+  /**
+   * Polled before every attempt and before every plan step. A panel cancel
+   * sets it, so the plan stops dispatching instead of starting more work after
+   * the child that was running has been killed.
+   */
+  isCancelled?: () => boolean;
 }
 
 /**
@@ -92,8 +104,20 @@ export class Scheduler {
   async runTask(envelope: TaskEnvelope): Promise<{ ok: boolean; attempts: TaskAttempt[]; failure?: TaskFailure }> {
     const attempts: TaskAttempt[] = [];
     let feedback: string | undefined;
+    this.options.onTaskStart?.(envelope.task_id);
 
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      // A cancel that arrived before the child existed still has to stop the
+      // run: the flag is the earliest safe point, not a hint.
+      if (this.options.isCancelled?.()) {
+        const failure: TaskFailure = {
+          taskId: envelope.task_id,
+          attempts,
+          reason: "cancelled",
+          detail: `cancelled before attempt ${attempt}`,
+        };
+        return this.finishFailure(failure, attempts, envelope);
+      }
       const startedAt = this.timestamp();
       const taskEnvelope: TaskEnvelope = feedback
         ? { ...envelope, background: [envelope.background, "", "## Previous refusal", feedback].join("\n") }
@@ -263,6 +287,15 @@ export class Scheduler {
     const pending = new Set(tasks.map((t) => t.task_id));
 
     while (pending.size > 0) {
+      // A cancel ends the plan for the same reason a block does: the remaining
+      // tasks would run on work the human just told it to stop doing.
+      if (this.options.isCancelled?.()) {
+        for (const id of pending) {
+          skipped.push({ taskId: id, because: "cancelled by the panel" });
+        }
+        break;
+      }
+
       // A blocked pipeline means the whole stage is waiting for a human. Running
       // the remaining tasks would build on work nobody has accepted yet, so the
       // plan stops here and reports what is left, rather than pretending the
@@ -289,6 +322,11 @@ export class Scheduler {
       }
 
       for (const task of ready) {
+        if (this.options.isCancelled?.()) {
+          skipped.push({ taskId: task.task_id, because: "cancelled by the panel" });
+          pending.delete(task.task_id);
+          continue;
+        }
         // A task in the same batch may have blocked the pipeline; the rest of
         // this batch must not run past that point.
         if (this.options.pipeline.isBlocked) {

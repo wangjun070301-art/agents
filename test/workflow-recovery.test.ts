@@ -369,3 +369,68 @@ test("a terminal stage cannot be blocked", () => {
   assert.equal(blocked.ok, false);
   assert.equal(blocked.refused?.reason, "terminal");
 });
+
+/**
+ * A cancel that arrives before the child exists is still a cancel. The flag is
+ * polled before the first attempt, so no spawn happens at all.
+ */
+test("a cancel before the first attempt stops the run without spawning", async () => {
+  const pipeline = new Pipeline("IMPLEMENT");
+  let spawned = 0;
+  const adapter: WorkflowAdapter = {
+    ...stub("ok"),
+    execute: async () => {
+      spawned += 1;
+      return good;
+    },
+  };
+  const scheduler = new Scheduler({
+    adapter,
+    requirements,
+    pipeline,
+    maxAttempts: 2,
+    isCancelled: () => true,
+  });
+  const outcome = await scheduler.runTask(envelope);
+  assert.equal(spawned, 0, "a cancelled run must not spawn a child");
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.failure?.reason, "cancelled");
+});
+
+test("a cancelled run is not retried", async () => {
+  const pipeline = new Pipeline("IMPLEMENT");
+  let attempts = 0;
+  let cancelled = false;
+  const adapter: WorkflowAdapter = {
+    ...stub("ok"),
+    execute: async () => {
+      attempts += 1;
+      cancelled = true;
+      throw new CodexAdapterError("spawn-failed", "codex was cancelled before it finished", false);
+    },
+  };
+  const scheduler = new Scheduler({
+    adapter,
+    requirements,
+    pipeline,
+    maxAttempts: 3,
+    isCancelled: () => cancelled,
+  });
+  const outcome = await scheduler.runTask(envelope);
+  assert.equal(attempts, 1, "a cancel must not consume the retry budget");
+  assert.equal(pipeline.isBlocked, false, "a cancel must not block the pipeline");
+});
+
+test("onTaskStart names the task before it runs", async () => {
+  const pipeline = new Pipeline("IMPLEMENT");
+  const seen: string[] = [];
+  const scheduler = new Scheduler({
+    adapter: stub("ok"),
+    requirements,
+    pipeline,
+    maxAttempts: 1,
+    onTaskStart: (id) => seen.push(id),
+  });
+  await scheduler.runTask(envelope);
+  assert.deepEqual(seen, ["T-1"]);
+});

@@ -44,6 +44,8 @@ export function createPanel(options: ServerOptions): {
   let active: {
     taskId: string;
     adapter: CodexAdapter | null;
+    /** The task the adapter is actually running; a plan changes this per task. */
+    currentTask: string | null;
     lines: string[];
     cancelling: boolean;
     startedAt: string;
@@ -154,6 +156,7 @@ export function createPanel(options: ServerOptions): {
           active = {
             taskId: task.task_id,
             adapter: null,
+            currentTask: null,
             lines: [],
             cancelling: false,
             startedAt: new Date().toISOString(),
@@ -166,6 +169,10 @@ export function createPanel(options: ServerOptions): {
             onCreated: (adapter) => {
               if (active?.taskId === task.task_id) active.adapter = adapter;
             },
+            onTaskStart: (taskId) => {
+              if (active?.taskId === task.task_id) active.currentTask = taskId;
+            },
+            isCancelled: () => active?.taskId === task.task_id && active.cancelling,
             onOutput: (chunk) => {
               if (active?.taskId === task.task_id) {
                 active.lines.push(redactSecrets(chunk));
@@ -214,12 +221,27 @@ export function createPanel(options: ServerOptions): {
           active = {
             taskId: "PLAN",
             adapter: null,
+            currentTask: null,
             lines: [],
             cancelling: false,
             startedAt: new Date().toISOString(),
           };
           send(res, 202, JSON.stringify({ accepted: true, taskId: "PLAN" }));
-          void executePlan(project, stateDir, options.codexPath)
+          void executePlan(project, stateDir, options.codexPath, {
+            onCreated: (adapter) => {
+              if (active?.taskId === "PLAN") active.adapter = adapter;
+            },
+            onTaskStart: (taskId) => {
+              if (active?.taskId === "PLAN") active.currentTask = taskId;
+            },
+            isCancelled: () => active?.taskId === "PLAN" && active.cancelling,
+            onOutput: (chunk) => {
+              if (active?.taskId === "PLAN") {
+                active.lines.push(redactSecrets(chunk));
+                if (active.lines.length > 2000) active.lines.splice(0, active.lines.length - 2000);
+              }
+            },
+          })
             .then((result) => {
               lastRun = {
                 taskId: "PLAN",
@@ -227,6 +249,7 @@ export function createPanel(options: ServerOptions): {
                 finishedAt: new Date().toISOString(),
                 ...(result.failed.length ? { failure: result } : {}),
               };
+              if (active?.taskId === "PLAN") lastLines = [...active.lines];
             })
             .catch((error: unknown) => {
               lastRun = {
@@ -251,11 +274,13 @@ export function createPanel(options: ServerOptions): {
         return;
       }
       active.cancelling = true;
-      // The adapter is created inside executeTask and linked back here. If it
-      // is not linked yet the task is still starting; the flag alone makes the
-      // next run stop before spawning, which is the earliest safe point.
+      // The adapter is created inside executeTask/executePlan and linked back
+      // here. If it is not linked yet the task is still starting; the cancel
+      // flag is polled by the scheduler before every attempt, so the run stops
+      // at the earliest safe point either way.
+      const runningTask = active.currentTask ?? active.taskId;
       if (active.adapter) {
-        active.adapter.cancel(active.taskId).catch(() => {});
+        active.adapter.cancel(runningTask).catch(() => {});
       }
       send(res, 200, JSON.stringify({ ok: true, taskId: active.taskId }));
       return;
@@ -335,7 +360,12 @@ async function executeTask(
   task: Project["tasks"][number],
   stateDir: string,
   codexPath: string | undefined,
-  hooks?: { onCreated?: (adapter: CodexAdapter) => void; onOutput?: (chunk: string) => void },
+  hooks?: {
+    onCreated?: (adapter: CodexAdapter) => void;
+    onTaskStart?: (taskId: string) => void;
+    isCancelled?: () => boolean;
+    onOutput?: (chunk: string) => void;
+  },
 ): Promise<{ ok: boolean; failure?: unknown }> {
   const home = codexHomeFor(stateDir);
   fs.mkdirSync(home, { recursive: true });
@@ -363,6 +393,8 @@ async function executeTask(
     pipeline,
     maxAttempts: 2,
     stateDir,
+    ...(hooks?.onTaskStart ? { onTaskStart: hooks.onTaskStart } : {}),
+    ...(hooks?.isCancelled ? { isCancelled: hooks.isCancelled } : {}),
   });
 
   const outcome = await scheduler.runTask(task);
@@ -392,6 +424,12 @@ async function executePlan(
   project: Project,
   stateDir: string,
   codexPath: string | undefined,
+  hooks?: {
+    onCreated?: (adapter: CodexAdapter) => void;
+    onTaskStart?: (taskId: string) => void;
+    isCancelled?: () => boolean;
+    onOutput?: (chunk: string) => void;
+  },
 ): Promise<{ completed: string[]; failed: Array<{ taskId: string; reason: string }>; skipped: Array<{ taskId: string; because: string }> }> {
   const home = codexHomeFor(stateDir);
   fs.mkdirSync(home, { recursive: true });
@@ -406,9 +444,19 @@ async function executePlan(
     model: project.model,
     sandbox: project.sandbox,
     observeWorktree: true,
+    ...(hooks?.onOutput ? { onOutput: hooks.onOutput } : {}),
   });
+  hooks?.onCreated?.(adapter);
   const pipeline = Pipeline.restore(path.join(stateDir, "pipeline.json"));
-  const scheduler = new Scheduler({ adapter, requirements: project.requirements, pipeline, maxAttempts: 2, stateDir });
+  const scheduler = new Scheduler({
+    adapter,
+    requirements: project.requirements,
+    pipeline,
+    maxAttempts: 2,
+    stateDir,
+    ...(hooks?.onTaskStart ? { onTaskStart: hooks.onTaskStart } : {}),
+    ...(hooks?.isCancelled ? { isCancelled: hooks.isCancelled } : {}),
+  });
   const outcome = await scheduler.runPlan(project.tasks);
   return {
     completed: outcome.completed,

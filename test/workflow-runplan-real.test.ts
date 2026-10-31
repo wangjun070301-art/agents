@@ -249,3 +249,39 @@ test("runPlan runs normally when the pipeline is not blocked", async () => {
   assert.equal(outcome.skipped.length, 0);
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+/**
+ * A cancel from the panel must stop the plan, not just the one child that was
+ * running. Otherwise "interrupt" kills task one and silently starts task two.
+ */
+test("runPlan stops dispatching once the panel cancels", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runplan-cancel-"));
+  const pipeline = new Pipeline("PLAN");
+  const calls: string[] = [];
+  let cancelled = false;
+  const base = planAdapter(root);
+  const adapter: WorkflowAdapter = {
+    ...base,
+    execute: async (envelope: TaskEnvelope) => {
+      calls.push(envelope.task_id);
+      // The human clicks interrupt while the first task is still in flight.
+      cancelled = true;
+      return base.execute(envelope);
+    },
+  };
+  const scheduler = new Scheduler({
+    adapter,
+    requirements,
+    pipeline,
+    maxAttempts: 1,
+    isCancelled: () => cancelled,
+  });
+  const outcome = await scheduler.runPlan(plan);
+
+  assert.equal(calls.length, 1, "only the task already in flight may run");
+  assert.ok(
+    outcome.skipped.every((s) => /cancelled by the panel/.test(s.because)),
+    `every remaining task must say it was cancelled: ${JSON.stringify(outcome.skipped)}`,
+  );
+  fs.rmSync(root, { recursive: true, force: true });
+});
