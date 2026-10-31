@@ -13,6 +13,7 @@ import type {
   ExecuteOptions,
   WorkflowAdapter,
 } from "../adapters.js";
+import { diffSnapshots, snapshotWorktree, type ObservedChange, type WorktreeSnapshot } from "../observer.js";
 
 export type SandboxMode = "read-only" | "workspace-write" | "bypass";
 
@@ -47,6 +48,19 @@ export interface CodexAdapterOptions {
   modelCatalogPath?: string;
   timeoutMs?: number;
   spawn?: SpawnFn;
+  /**
+   * Snapshot the worktree before and after each run so `collectEvidence`
+   * reports what actually changed, not what the child said it changed.
+   * Enabled by default; a test can turn it off to keep runs hermetic.
+   */
+  observeWorktree?: boolean;
+}
+
+/** What the adapter saw, kept separate from what the child claimed. */
+interface Observation {
+  before: WorktreeSnapshot;
+  after: WorktreeSnapshot;
+  changes: ObservedChange[];
 }
 
 export class CodexAdapterError extends Error {
@@ -343,6 +357,7 @@ export class CodexAdapter implements WorkflowAdapter {
   private readonly spawn: SpawnFn;
   private readonly sessions = new Map<string, { sessionId: string; envelope: TaskEnvelope }>();
   private readonly evidence = new Map<string, EvidenceBundle>();
+  private readonly observations = new Map<string, Observation>();
   private readonly running = new Map<string, AbortController>();
 
   constructor(private readonly options: CodexAdapterOptions) {
@@ -474,7 +489,17 @@ export class CodexAdapter implements WorkflowAdapter {
     ];
 
     let outcome: SpawnOutcome;
+    let before: WorktreeSnapshot | undefined;
     try {
+      if (this.options.observeWorktree !== false) {
+        try {
+          before = snapshotWorktree(envelope.repo_path);
+        } catch (error) {
+          // Observation is an extra check, not a precondition. If the worktree
+          // cannot be read, the run still happens and the evidence says so.
+          before = undefined;
+        }
+      }
       outcome = await this.spawn(this.options.codexPath, args, {
         cwd: envelope.repo_path,
         env: this.childEnv(),
@@ -488,6 +513,19 @@ export class CodexAdapter implements WorkflowAdapter {
       );
     } finally {
       this.running.delete(envelope.task_id);
+    }
+
+    // Take the after-snapshot regardless of how the child exited: a crash that
+    // left files behind is exactly the case a gate needs to see.
+    let observedChanges: ObservedChange[] | undefined;
+    if (before) {
+      try {
+        const after = snapshotWorktree(envelope.repo_path);
+        observedChanges = diffSnapshots(before, after);
+        this.observations.set(envelope.task_id, { before, after, changes: observedChanges });
+      } catch {
+        observedChanges = undefined;
+      }
     }
 
     if (outcome.timedOut) {
@@ -536,7 +574,10 @@ export class CodexAdapter implements WorkflowAdapter {
 
     this.evidence.set(envelope.task_id, {
       task_id: envelope.task_id,
-      changed_files: checked.data.changed_files,
+      // The observed list when we have one: it is evidence, not a claim.
+      changed_files: observedChanges
+        ? observedChanges.map((c) => c.path)
+        : checked.data.changed_files,
       command_records: checked.data.commands,
       artifact_paths: checked.data.artifacts,
       raw_log_path: resultFile,
@@ -566,5 +607,13 @@ export class CodexAdapter implements WorkflowAdapter {
       throw new CodexAdapterError("result-missing", `no evidence recorded for ${taskId}`);
     }
     return recorded;
+  }
+
+  /**
+   * The changes this adapter saw on disk, independent of the child's report.
+   * Undefined when observation was disabled or the worktree could not be read.
+   */
+  observedChanges(taskId: string): ObservedChange[] | undefined {
+    return this.observations.get(taskId)?.changes;
   }
 }
