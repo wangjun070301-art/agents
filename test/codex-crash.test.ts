@@ -149,3 +149,98 @@ test("format retries do not retry a crash", async () => {
   await assert.rejects(() => adapter.execute(envelope));
   assert.equal(calls, 1, "a crash must not be retried as if it were a formatting wobble");
 });
+
+/**
+ * The dangerous case: the child wrote part of a result file before it died.
+ * A truncated JSON object may still parse if the truncation happens after the
+ * closing brace of a nested object, or may parse into something plausible.
+ * The adapter must refuse it because the process did not finish, not because
+ * the bytes happen to look wrong.
+ */
+test("a crash that left a half-written result file is refused, not parsed", async () => {
+  const home = scratchHome();
+  const adapter = new CodexAdapter({
+    codexPath: process.execPath,
+    codexHome: home,
+    model: "m",
+    observeWorktree: false,
+    spawn: async () => {
+      const runDir = path.join(home, "runs", envelope.task_id);
+      fs.mkdirSync(runDir, { recursive: true });
+      // A syntactically valid but truncated payload: the object closes, but
+      // the content is cut off mid-string. JSON.parse would reject this, and a
+      // lenient extractor could mistake the inner object for the answer.
+      fs.writeFileSync(
+        path.join(runDir, "result.json"),
+        '{"task_id":"T-CRASH","status":"succeeded","summary":"partial wor',
+        "utf8",
+      );
+      return { code: -1, stdout: "", stderr: "", timedOut: false, killedBy: "SIGKILL" };
+    },
+  });
+  await assert.rejects(
+    () => adapter.execute(envelope),
+    (error: unknown) =>
+      error instanceof CodexAdapterError &&
+      error.kind === "spawn-failed" &&
+      /terminated by/.test(error.message),
+    "the crash must be reported before the result file is even opened",
+  );
+});
+
+test("a crash that left a complete-looking result file is still refused", async () => {
+  const home = scratchHome();
+  const adapter = new CodexAdapter({
+    codexPath: process.execPath,
+    codexHome: home,
+    model: "m",
+    observeWorktree: false,
+    spawn: async () => {
+      const runDir = path.join(home, "runs", envelope.task_id);
+      fs.mkdirSync(runDir, { recursive: true });
+      // This is a fully valid task result. The child died after writing it but
+      // before exiting cleanly, so the adapter must not treat it as success:
+      // the process never reported that it finished.
+      fs.writeFileSync(
+        path.join(runDir, "result.json"),
+        JSON.stringify({
+          task_id: "T-CRASH",
+          status: "succeeded",
+          summary: "looks complete",
+          changed_files: [],
+          commands: [{ command: "true", exit_code: 0 }],
+          test_results: [{ name: "t", outcome: "passed", acceptance_ids: ["AC-1"] }],
+        }),
+        "utf8",
+      );
+      return { code: -1, stdout: "", stderr: "", timedOut: false, killedBy: "SIGKILL" };
+    },
+  });
+  await assert.rejects(
+    () => adapter.execute(envelope),
+    (error: unknown) => error instanceof CodexAdapterError && error.kind === "spawn-failed",
+    "a plausible-looking file from a killed process is not a result",
+  );
+});
+
+test("a crash is refused even when a result file exists", async () => {
+  const home = scratchHome();
+  const adapter = new CodexAdapter({
+    codexPath: process.execPath,
+    codexHome: home,
+    model: "m",
+    observeWorktree: false,
+    spawn: async () => {
+      // A result file exists, so a "result-missing" error would be wrong here.
+      // The only correct refusal is the crash itself.
+      const runDir = path.join(home, "runs", envelope.task_id);
+      fs.mkdirSync(runDir, { recursive: true });
+      fs.writeFileSync(path.join(runDir, "result.json"), "{}", "utf8");
+      return { code: -1, stdout: "", stderr: "", timedOut: false, killedBy: "SIGKILL" };
+    },
+  });
+  await assert.rejects(
+    () => adapter.execute(envelope),
+    (error: unknown) => error instanceof CodexAdapterError && error.kind === "spawn-failed",
+  );
+});
