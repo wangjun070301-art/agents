@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { createPanel } from "../src/workflow/server.js";
 
 /**
@@ -250,5 +251,24 @@ test("the state reports which stages are reachable and which are gated", async (
       "INTAKE may only go to CLARIFY or BLOCKED",
     );
     assert.equal(state.nextStages[0]?.gate, null);
+  });
+});
+
+/**
+ * The inline script lives inside a template literal in a .ts file, so the
+ * TypeScript compiler never sees it. A missing parenthesis surfaces only in
+ * the browser. Extract the script and syntax-check it with node.
+ */
+test("the inline panel script is syntactically valid JavaScript", async () => {
+  await withPanel(async ({ base }) => {
+    const response = await fetch(base);
+    const html = await response.text();
+    const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1];
+    assert.ok(script, "the page must contain an inline script");
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "panel-js-")), "panel.js");
+    fs.writeFileSync(file, script, "utf8");
+    const result = spawnSync(process.execPath, ["--check", file], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr || "inline script must parse");
+    fs.rmSync(path.dirname(file), { recursive: true, force: true });
   });
 });

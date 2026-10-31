@@ -171,6 +171,46 @@ export function createPanel(options: ServerOptions): {
         });
       return;
     }
+    if (req.method === "POST" && url.pathname === "/api/run-plan") {
+      readJson(req)
+        .then(async () => {
+          const project = readProject(stateDir);
+          if (!project) {
+            send(res, 400, JSON.stringify({ error: "no project configured" }));
+            return;
+          }
+          if (running) {
+            send(res, 409, JSON.stringify({ error: `a run is already in progress: ${running.taskId}` }));
+            return;
+          }
+          running = { taskId: "PLAN", startedAt: new Date().toISOString() };
+          send(res, 202, JSON.stringify({ accepted: true, taskId: "PLAN" }));
+          void executePlan(project, stateDir, options.codexPath)
+            .then((result) => {
+              lastRun = {
+                taskId: "PLAN",
+                ok: result.failed.length === 0,
+                finishedAt: new Date().toISOString(),
+                ...(result.failed.length ? { failure: result } : {}),
+              };
+            })
+            .catch((error: unknown) => {
+              lastRun = {
+                taskId: "PLAN",
+                ok: false,
+                finishedAt: new Date().toISOString(),
+                failure: { reason: "panel-error", detail: error instanceof Error ? error.message : String(error) },
+              };
+            })
+            .finally(() => {
+              running = undefined;
+            });
+        })
+        .catch((error: unknown) => {
+          send(res, 400, JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        });
+      return;
+    }
     if (req.method === "POST" && url.pathname === "/api/advance") {
       readJson(req)
         .then((body) => {
@@ -292,6 +332,39 @@ async function executeTask(
   return { ok: outcome.ok, ...(outcome.failure ? { failure: outcome.failure } : {}) };
 }
 
+/**
+ * Run every task in dependency order with the real scheduler. Returns the
+ * plan outcome so the panel can show which tasks completed and which did not.
+ */
+async function executePlan(
+  project: Project,
+  stateDir: string,
+  codexPath: string | undefined,
+): Promise<{ completed: string[]; failed: Array<{ taskId: string; reason: string }>; skipped: Array<{ taskId: string; because: string }> }> {
+  const home = codexHomeFor(stateDir);
+  fs.mkdirSync(home, { recursive: true });
+  for (const file of ["auth.json", "config.toml", "cc-switch-model-catalog.json"]) {
+    const from = path.join(process.env.USERPROFILE ?? "", ".codex", file);
+    const to = path.join(home, file);
+    if (fs.existsSync(from) && !fs.existsSync(to)) fs.copyFileSync(from, to);
+  }
+  const adapter = new CodexAdapter({
+    codexPath: codexPath ?? defaultCodexPath(),
+    codexHome: home,
+    model: project.model,
+    sandbox: project.sandbox,
+    observeWorktree: true,
+  });
+  const pipeline = Pipeline.restore(path.join(stateDir, "pipeline.json"));
+  const scheduler = new Scheduler({ adapter, requirements: project.requirements, pipeline, maxAttempts: 2, stateDir });
+  const outcome = await scheduler.runPlan(project.tasks);
+  return {
+    completed: outcome.completed,
+    failed: outcome.failed.map((f) => ({ taskId: f.taskId, reason: f.detail })),
+    skipped: outcome.skipped,
+  };
+}
+
 /** The forward edge out of a stage, if there is one. */
 function nextStage(stage: Stage): Stage | undefined {
   const edges = LEGAL_TRANSITIONS[stage].filter((to) => to !== "BLOCKED");
@@ -362,6 +435,12 @@ button:disabled{opacity:.4;cursor:default}
 .msg{font-size:12px;margin-top:10px;line-height:1.7}
 .msg.err{color:var(--red)}
 .empty{padding:34px 20px;text-align:center;color:var(--muted);font-size:13px;line-height:1.9}
+.req{border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px;background:#fcfdfb}
+.item-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+.ac-list{margin-top:12px;padding-left:12px;border-left:2px solid #eef1e9}
+.ac{border:1px solid #eef1e9;border-radius:8px;padding:10px;margin-bottom:8px;background:#fff}
+.req input,.req textarea{font-size:12px;padding:8px 10px}
+.req .label{margin:8px 0 4px;font-size:10px}
 @media(max-width:880px){.row{grid-template-columns:minmax(0,1fr)}body{padding:20px}}
 </style></head><body>
 <h1>流水线控制台</h1>
@@ -392,14 +471,19 @@ button:disabled{opacity:.4;cursor:default}
       <p class="label" style="margin-top:12px">代码目录（绝对路径）</p><input id="pRepo" placeholder="C:\\path\\to\\repo">
       <p class="label" style="margin-top:12px">模型</p><input id="pModel" value="deepseek-v4.1-flash-solo">
       <p class="label" style="margin-top:12px">沙箱</p><input id="pSandbox" value="bypass" placeholder="read-only / workspace-write / bypass">
-      <p class="label" style="margin-top:12px">需求与任务（JSON）</p>
-      <textarea id="pJson" style="min-height:180px;font-family:ui-monospace,monospace;font-size:12px"></textarea>
-      <div class="actions"><button id="saveProject">保存配置</button></div>
+      <p class="label" style="margin-top:18px">需求（每条需求至少一个验收项）</p>
+      <div id="reqList"></div>
+      <div class="actions"><button class="ghost" id="addReq">+ 加一条需求</button></div>
+      <p class="label" style="margin-top:18px">任务</p>
+      <div id="taskForm"></div>
+      <div class="actions"><button class="ghost" id="addTask">+ 加一个任务</button></div>
+      <div class="actions" style="margin-top:18px"><button id="saveProject">保存配置</button></div>
       <div class="msg" id="projMsg"></div>
     </div>
   </section>
   <section class="card"><div class="head"><h2>任务</h2><span class="badge" id="runState">空闲</span></div>
     <div class="body" id="taskList"><div class="empty">先保存项目配置。</div></div>
+    <div class="body" style="padding-top:0"><button id="runPlanBtn" style="width:100%">跑整个计划（按依赖顺序）</button></div>
   </section>
 </div>
 <section class="card" style="margin-top:20px"><div class="head"><h2>任务记录</h2><span class="badge" id="taskCount">0</span></div>
@@ -442,7 +526,7 @@ async function load(){
     const item=el('div','item');
     const line=el('div',null);line.append(el('b',null,(stageNames[rec.from]||rec.from)+' → '+(stageNames[rec.to]||rec.to)));
     if(rec.gate)line.append(el('span','mono','  '+rec.gate+(rec.verdict&&rec.verdict.passed?' 通过':' 未通过')));
-    item.append(line,el('div','mono',new Date(rec.at).toLocaleString()+(rec.note?' · '+rec.note:''));
+    item.append(line,el('div','mono',new Date(rec.at).toLocaleString()+(rec.note?' · '+rec.note:'')));
     if(rec.verdict&&!rec.verdict.passed&&rec.verdict.blocking.length){item.append(el('div','mono','拦截：'+rec.verdict.blocking.join('; ')));}
     h.append(item);
   }
@@ -453,9 +537,84 @@ async function load(){
     const item=el('div','item');
     item.append(el('b',null,task.taskId));
     item.append(el('div','mono',task.files.join(' · ')));
-    if(task.failure){item.append(el('div','mono','失败：'+(task.failure.reason||'')+' — '+(task.failure.detail||''));}
+    if(task.failure){item.append(el('div','mono','失败：'+(task.failure.reason||'')+' — '+(task.failure.detail||'')));}
     t.append(item);
   }
+}
+/**
+ * The form keeps its own model. Loading from the server only happens once, so
+ * a half-typed requirement is not overwritten by the 3-second refresh.
+ */
+const form={requirements:[],tasks:[]};
+function reqRow(req,ri){
+  const box=el('div','req');
+  const head=el('div','item-head');
+  head.append(el('b',null,req.req_id||'新需求'));
+  const rm=el('button','ghost','删除');
+  rm.onclick=()=>{form.requirements.splice(ri,1);drawForm();};
+  head.append(rm);box.append(head);
+
+  const idIn=el('input');idIn.value=req.req_id||'';idIn.placeholder='REQ-1';
+  idIn.oninput=()=>{req.req_id=idIn.value;};
+  const stIn=el('textarea');stIn.value=req.statement||'';stIn.placeholder='这条需求要解决什么';
+  stIn.oninput=()=>{req.statement=stIn.value;};
+  box.append(el('p','label','需求编号'),idIn,el('p','label','描述'),stIn);
+
+  const acBox=el('div','ac-list');
+  (req.acceptance||[]).forEach((ac,ai)=>{
+    const a=el('div','ac');
+    const ah=el('div','item-head');
+    ah.append(el('b',null,ac.ac_id||'新验收项'));
+    const ar=el('button','ghost','删除');
+    ar.onclick=()=>{req.acceptance.splice(ai,1);drawForm();};
+    ah.append(ar);a.append(ah);
+    const acId=el('input');acId.value=ac.ac_id||'';acId.placeholder='AC-1';
+    acId.oninput=()=>{ac.ac_id=acId.value;};
+    const desc=el('input');desc.value=ac.description||'';desc.placeholder='怎么算通过';
+    desc.oninput=()=>{ac.description=desc.value;};
+    const kind=el('input');kind.value=ac.kind||'automated';kind.placeholder='automated 或 manual';
+    kind.oninput=()=>{ac.kind=kind.value;ac.requirement_id=req.req_id;};
+    const cmd=el('input');cmd.value=ac.verification_command||'';cmd.placeholder='自动检查用的命令';
+    cmd.oninput=()=>{ac.verification_command=cmd.value;};
+    a.append(el('p','label','验收编号'),acId,el('p','label','描述'),desc,el('p','label','类型'),kind,el('p','label','命令（automated 必填）'),cmd);
+    acBox.append(a);
+  });
+  const addAc=el('button','ghost','+ 加验收项');
+  addAc.onclick=()=>{(req.acceptance=req.acceptance||[]).push({ac_id:'',requirement_id:req.req_id||'',description:'',kind:'automated',verification_command:''});drawForm();};
+  acBox.append(addAc);
+  box.append(acBox);
+  return box;
+}
+function taskRow(task,ti){
+  const box=el('div','req');
+  const head=el('div','item-head');
+  head.append(el('b',null,task.role),el('span','mono','  '+(task.task_id||'')));
+  const rm=el('button','ghost','删除');
+  rm.onclick=()=>{form.tasks.splice(ti,1);drawForm();};
+  head.append(rm);box.append(head);
+  const mk=(label,key,placeholder)=>{const i=el('input');i.value=task[key]||'';i.placeholder=placeholder;i.oninput=()=>{task[key]=i.value;};return [el('p','label',label),i];};
+  const idI=mk('任务编号','task_id','T-1');
+  const roleI=mk('角色','role','developer / tester / reviewer');
+  const objI=mk('目标','objective','要做什么');
+  const pathsI=mk('可写目录（逗号分隔）','allowed_paths','src, test');
+  const delivI=mk('交付物（逗号分隔）','deliverables','src/x.js');
+  const acsI=mk('验收编号（逗号分隔）','acceptance_ids','AC-1');
+  const depsI=mk('依赖任务（逗号分隔）','dependencies','T-0');
+  for(const pair of [idI,roleI,objI,pathsI,delivI,acsI,depsI])box.append(...pair);
+  // Array fields need splitting on comma; bind once after the inputs exist.
+  pathsI[1].oninput=()=>{task.allowed_paths=pathsI[1].value.split(',').map(s=>s.trim()).filter(Boolean);};
+  delivI[1].oninput=()=>{task.deliverables=delivI[1].value.split(',').map(s=>s.trim()).filter(Boolean);};
+  acsI[1].oninput=()=>{task.acceptance_ids=acsI[1].value.split(',').map(s=>s.trim()).filter(Boolean);};
+  depsI[1].oninput=()=>{task.dependencies=depsI[1].value.split(',').map(s=>s.trim()).filter(Boolean);};
+  return box;
+}
+function drawForm(){
+  const rl=$('reqList');rl.replaceChildren();
+  if(!form.requirements.length)rl.append(el('div','empty','还没有需求。点下面的按钮加一条。'));
+  form.requirements.forEach((r,i)=>rl.append(reqRow(r,i)));
+  const tf=$('taskForm');tf.replaceChildren();
+  if(!form.tasks.length)tf.append(el('div','empty','还没有任务。点下面的按钮加一个。'));
+  form.tasks.forEach((t,i)=>tf.append(taskRow(t,i)));
 }
 function renderProject(project){
   const badge=$('projState');
@@ -466,7 +625,9 @@ function renderProject(project){
     $('pRepo').value=project.repo_path;
     $('pModel').value=project.model;
     $('pSandbox').value=project.sandbox;
-    $('pJson').value=JSON.stringify({requirements:project.requirements,tasks:project.tasks},null,2);
+    form.requirements=JSON.parse(JSON.stringify(project.requirements||[]));
+    form.tasks=JSON.parse(JSON.stringify(project.tasks||[]));
+    drawForm();
     projectLoaded=true;
   }
 }
@@ -503,16 +664,44 @@ async function runTask(taskId){
   if(!r.ok){m.className='msg err';m.textContent=v.error||'启动失败';return;}
   m.className='msg';m.textContent='已启动，任务在后台跑，页面每 3 秒刷新';load();
 }
+$('runPlanBtn').onclick=async()=>{
+  const m=$('actionMsg');
+  const r=await fetch('/api/run-plan',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+  const v=await r.json();
+  if(!r.ok){m.className='msg err';m.textContent=v.error||'启动失败';return;}
+  m.className='msg';m.textContent='已启动整个计划，后台按依赖顺序跑';load();
+};
 $('saveProject').onclick=async()=>{
   const m=$('projMsg');
-  let parsed;
-  try{parsed=JSON.parse($('pJson').value||'{}');}catch(e){m.className='msg err';m.textContent='JSON 解析失败：'+e.message;return;}
-  const body={name:$('pName').value.trim(),repo_path:$('pRepo').value.trim(),model:$('pModel').value.trim(),sandbox:$('pSandbox').value.trim()||'bypass',requirements:parsed.requirements,tasks:parsed.tasks};
+  // Fill the fields the form cannot show, then send the whole model. The
+  // server validates it; the browser does not try to be clever about shape.
+  const requirements=form.requirements.map(r=>({
+    ...r,
+    acceptance:(r.acceptance||[]).map(a=>({
+      ...a,
+      requirement_id:r.req_id,
+      ...(a.kind==='manual'?{manual_check:a.manual_check||{owner:'He',procedure:'人工确认'}}:{}),
+      ...(a.kind==='automated'&&!a.verification_command?{}:{}),
+    })),
+  }));
+  const tasks=form.tasks.map(t=>({
+    ...t,
+    repo_path:$('pRepo').value.trim(),
+    base_revision:t.base_revision||'init',
+    allowed_paths:t.allowed_paths||[],
+    deliverables:t.deliverables&&t.deliverables.length?t.deliverables:['(none)'],
+    acceptance_ids:t.acceptance_ids||[],
+    verification_commands:t.verification_commands||[],
+  }));
+  const body={name:$('pName').value.trim(),repo_path:$('pRepo').value.trim(),model:$('pModel').value.trim(),sandbox:$('pSandbox').value.trim()||'bypass',requirements,tasks};
   const r=await fetch('/api/project',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   const v=await r.json();
   if(!r.ok){m.className='msg err';m.textContent=v.error||'保存失败';return;}
   m.className='msg';m.textContent='已保存';projectLoaded=false;load();
 };
+$('addReq').onclick=()=>{form.requirements.push({req_id:'',statement:'',acceptance:[]});drawForm();};
+$('addTask').onclick=()=>{form.tasks.push({task_id:'',role:'developer',objective:'',allowed_paths:[],deliverables:[],acceptance_ids:[],dependencies:[]});drawForm();};
+drawForm();
 async function post(route,body){
   const r=await fetch(route,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   const v=await r.json();const m=$('actionMsg');
