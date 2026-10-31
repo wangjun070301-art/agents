@@ -1,6 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { Pipeline } from "./pipeline.js";
 import type { Stage } from "./contracts.js";
 import { readProject, writeProject, codexHomeFor, defaultCodexPath, type Project } from "./project.js";
@@ -38,8 +39,16 @@ export function createPanel(options: ServerOptions): {
   const pipeline = Pipeline.restore(stateFile);
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 18493;
-  /** A run in flight, so the UI cannot start two at once. */
-  let running: { taskId: string; startedAt: string } | undefined;
+  /** A run in flight, with the adapter so the UI can cancel it. */
+  let active: {
+    taskId: string;
+    adapter: CodexAdapter | null;
+    lines: string[];
+    cancelling: boolean;
+    startedAt: string;
+  } | undefined;
+  /** Output of the last finished run, so it stays visible after completion. */
+  let lastLines: string[] = [];
   let lastRun: { taskId: string; ok: boolean; finishedAt: string; failure?: unknown } | undefined;
 
   const send = (res: http.ServerResponse, status: number, body: string, type = "application/json") => {
@@ -54,8 +63,9 @@ export function createPanel(options: ServerOptions): {
     history: pipeline.history,
     tasks: readTaskRecords(stateDir),
     project: readProject(stateDir) ?? null,
-    running: running ?? null,
+    running: active ? { taskId: active.taskId, cancelling: active.cancelling, startedAt: active.startedAt } : null,
     lastRun: lastRun ?? null,
+    outputLines: (active?.taskId ?? lastRun?.taskId) ? (active?.lines ?? lastLines) : [],
     /** Which stages this stage may legally move to, with the gate on that edge. */
     nextStages: LEGAL_TRANSITIONS[pipeline.stage].map((to) => ({
       to,
@@ -136,16 +146,32 @@ export function createPanel(options: ServerOptions): {
             send(res, 404, JSON.stringify({ error: `no such task: ${taskId}` }));
             return;
           }
-          if (running) {
-            send(res, 409, JSON.stringify({ error: `a run is already in progress: ${running.taskId}` }));
+          if (active) {
+            send(res, 409, JSON.stringify({ error: `a run is already in progress: ${active.taskId}` }));
             return;
           }
-          running = { taskId: task.task_id, startedAt: new Date().toISOString() };
+          active = {
+            taskId: task.task_id,
+            adapter: null,
+            lines: [],
+            cancelling: false,
+            startedAt: new Date().toISOString(),
+          };
           send(res, 202, JSON.stringify({ accepted: true, taskId: task.task_id }));
 
           // Run after responding, so the UI gets its acknowledgement at once
           // instead of waiting on a child process that may take minutes.
-          void executeTask(project, task, stateDir, options.codexPath)
+          void executeTask(project, task, stateDir, options.codexPath, {
+            onCreated: (adapter) => {
+              if (active?.taskId === task.task_id) active.adapter = adapter;
+            },
+            onOutput: (chunk) => {
+              if (active?.taskId === task.task_id) {
+                active.lines.push(chunk);
+                if (active.lines.length > 2000) active.lines.splice(0, active.lines.length - 2000);
+              }
+            },
+          })
             .then((result) => {
               lastRun = {
                 taskId: task.task_id,
@@ -153,6 +179,7 @@ export function createPanel(options: ServerOptions): {
                 finishedAt: new Date().toISOString(),
                 ...(result.failure ? { failure: result.failure } : {}),
               };
+              if (active?.taskId === task.task_id) lastLines = [...active.lines];
             })
             .catch((error: unknown) => {
               lastRun = {
@@ -163,7 +190,7 @@ export function createPanel(options: ServerOptions): {
               };
             })
             .finally(() => {
-              running = undefined;
+              active = undefined;
             });
         })
         .catch((error: unknown) => {
@@ -179,11 +206,17 @@ export function createPanel(options: ServerOptions): {
             send(res, 400, JSON.stringify({ error: "no project configured" }));
             return;
           }
-          if (running) {
-            send(res, 409, JSON.stringify({ error: `a run is already in progress: ${running.taskId}` }));
+          if (active) {
+            send(res, 409, JSON.stringify({ error: `a run is already in progress: ${active.taskId}` }));
             return;
           }
-          running = { taskId: "PLAN", startedAt: new Date().toISOString() };
+          active = {
+            taskId: "PLAN",
+            adapter: null,
+            lines: [],
+            cancelling: false,
+            startedAt: new Date().toISOString(),
+          };
           send(res, 202, JSON.stringify({ accepted: true, taskId: "PLAN" }));
           void executePlan(project, stateDir, options.codexPath)
             .then((result) => {
@@ -203,12 +236,27 @@ export function createPanel(options: ServerOptions): {
               };
             })
             .finally(() => {
-              running = undefined;
+              active = undefined;
             });
         })
         .catch((error: unknown) => {
           send(res, 400, JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
         });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/cancel") {
+      if (!active) {
+        send(res, 409, JSON.stringify({ error: "nothing is running" }));
+        return;
+      }
+      active.cancelling = true;
+      // The adapter is created inside executeTask and linked back here. If it
+      // is not linked yet the task is still starting; the flag alone makes the
+      // next run stop before spawning, which is the earliest safe point.
+      if (active.adapter) {
+        active.adapter.cancel(active.taskId).catch(() => {});
+      }
+      send(res, 200, JSON.stringify({ ok: true, taskId: active.taskId }));
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/advance") {
@@ -286,6 +334,7 @@ async function executeTask(
   task: Project["tasks"][number],
   stateDir: string,
   codexPath: string | undefined,
+  hooks?: { onCreated?: (adapter: CodexAdapter) => void; onOutput?: (chunk: string) => void },
 ): Promise<{ ok: boolean; failure?: unknown }> {
   const home = codexHomeFor(stateDir);
   fs.mkdirSync(home, { recursive: true });
@@ -303,7 +352,9 @@ async function executeTask(
     model: project.model,
     sandbox: project.sandbox,
     observeWorktree: true,
+    ...(hooks?.onOutput ? { onOutput: hooks.onOutput } : {}),
   });
+  hooks?.onCreated?.(adapter);
   const pipeline = Pipeline.restore(path.join(stateDir, "pipeline.json"));
   const scheduler = new Scheduler({
     adapter,
@@ -484,6 +535,7 @@ button:disabled{opacity:.4;cursor:default}
   <section class="card"><div class="head"><h2>任务</h2><span class="badge" id="runState">空闲</span></div>
     <div class="body" id="taskList"><div class="empty">先保存项目配置。</div></div>
     <div class="body" style="padding-top:0"><button id="runPlanBtn" style="width:100%">跑整个计划（按依赖顺序）</button></div>
+    <div class="body" id="outputBox" style="padding-top:0" hidden><p class="label">实时输出</p><pre id="output" style="max-height:220px;overflow:auto"></pre><div class="actions"><button class="ghost" id="cancelBtn">取消当前任务</button></div></div>
   </section>
 </div>
 <section class="card" style="margin-top:20px"><div class="head"><h2>任务记录</h2><span class="badge" id="taskCount">0</span></div>
@@ -518,7 +570,7 @@ async function load(){
   }
   renderProject(s.project);
   renderTasks(s);
-  renderRunning(s.running,s.lastRun);
+  renderRunning(s.running,s.lastRun,s.outputLines);
   $('count').textContent=String(s.history.length);
   const h=$('history');h.replaceChildren();
   if(!s.history.length)h.append(el('div','empty','还没有阶段变化。'));
@@ -651,12 +703,29 @@ function renderTasks(s){
     list.append(item);
   }
 }
-function renderRunning(running,lastRun){
+function renderRunning(running,lastRun,outputLines){
   const badge=$('runState');
-  if(running){badge.textContent='运行中：'+running.taskId;badge.className='badge warn';return;}
-  if(lastRun){badge.textContent=(lastRun.ok?'完成':'失败')+'：'+lastRun.taskId;badge.className='badge'+(lastRun.ok?'':' bad');return;}
+  const outBox=$('outputBox');
+  if(running){
+    badge.textContent='运行中：'+running.taskId+(running.cancelling?'（正在取消）':'');badge.className='badge warn';
+    outBox.hidden=false;$('cancelBtn').disabled=running.cancelling;
+    $('output').textContent=(outputLines||[]).join('').slice(-2000);
+    return;
+  }
+  if(lastRun){
+    badge.textContent=(lastRun.ok?'完成':'失败')+'：'+lastRun.taskId;badge.className='badge'+(lastRun.ok?'':' bad');
+    if(outputLines&&outputLines.length){outBox.hidden=false;$('output').textContent=outputLines.join('').slice(-2000);}
+    return;
+  }
   badge.textContent='空闲';badge.className='badge';
 }
+$('cancelBtn').onclick=async()=>{
+  const m=$('actionMsg');
+  const r=await fetch('/api/cancel',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+  const v=await r.json();
+  if(!r.ok){m.className='msg err';m.textContent=v.error||'取消失败';return;}
+  m.className='msg';m.textContent='已请求取消';load();
+};
 async function runTask(taskId){
   const r=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({taskId})});
   const v=await r.json();

@@ -37,7 +37,7 @@ export interface SpawnOutcome {
 export type SpawnFn = (
   command: string,
   args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal },
+  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal; onOutput?: (chunk: string) => void },
 ) => Promise<SpawnOutcome>;
 
 export interface CodexAdapterOptions {
@@ -63,6 +63,12 @@ export interface CodexAdapterOptions {
    * Enabled by default; a test can turn it off to keep runs hermetic.
    */
   observeWorktree?: boolean;
+  /**
+   * Called with each chunk of the child's stdout as it arrives. Used by the
+   * control panel to stream output while a task is still running; the panel
+   * appends to a ring buffer so the page can show recent lines.
+   */
+  onOutput?: (chunk: string) => void;
   /**
    * How many times to re-run a child whose reply could not be parsed as a
    * task result. The model occasionally answers with prose instead of the
@@ -141,7 +147,11 @@ const defaultSpawn: SpawnFn = (command, args, options) =>
       finish({ code: -1, stdout, stderr, timedOut: false });
     };
     options.signal?.addEventListener("abort", onAbort);
-    child.stdout?.on("data", (chunk) => (stdout += chunk));
+    child.stdout?.on("data", (chunk) => {
+      const text = String(chunk);
+      stdout += text;
+      options.onOutput?.(text);
+    });
     child.stderr?.on("data", (chunk) => (stderr += chunk));
     child.on("error", (error) => {
       clearTimeout(timer);
@@ -584,6 +594,7 @@ export class CodexAdapter implements WorkflowAdapter {
         env: this.childEnv(),
         timeoutMs: Math.max(this.options.timeoutMs ?? 0, envelope.timeout_seconds * 1000),
         signal,
+        ...(this.options.onOutput ? { onOutput: this.options.onOutput } : {}),
       });
     } catch (error) {
       throw new CodexAdapterError(

@@ -272,3 +272,24 @@ test("the inline panel script is syntactically valid JavaScript", async () => {
     fs.rmSync(path.dirname(file), { recursive: true, force: true });
   });
 });
+
+test("cancelling when nothing is running is refused", async () => {
+  await withPanel(async ({ base }) => {
+    const response = await fetch(`${base}/api/cancel`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(response.status, 409);
+    const body = (await response.json()) as { error: string };
+    assert.match(body.error, /nothing is running/);
+  });
+});
+
+test("the state snapshot always carries the output lines array", async () => {
+  await withPanel(async ({ base }) => {
+    const state = (await (await fetch(`${base}/api/state`)).json()) as { outputLines: string[] };
+    assert.ok(Array.isArray(state.outputLines), "outputLines must be an array even when empty");
+    assert.equal(state.outputLines.length, 0);
+  });
+});
