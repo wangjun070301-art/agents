@@ -9,6 +9,7 @@ import {
   CodexAdapterError,
   extractJsonObject,
   normalizeTaskResult,
+  redactSecrets,
   renderTaskPrompt,
   TASK_RESULT_JSON_SCHEMA,
   type SpawnFn,
@@ -29,6 +30,14 @@ const envelope = taskEnvelopeSchema.parse({
   deliverables: ["src/x.ts"],
   acceptance_ids: ["AC-1"],
   verification_commands: [{ command: "node --version", expect_exit: 0 }],
+});
+
+test("redactSecrets masks token-shaped values in output", () => {
+  assert.equal(redactSecrets("token gho_abcdef1234567890xyz"), "token ***");
+  assert.equal(redactSecrets("Bearer abc.def.ghi123456"), "Bearer ***");
+  assert.equal(redactSecrets("api_key=sk-abcdefghijklmnopqrstuvwxyz123"), "api_key=sk-***");
+  assert.equal(redactSecrets("github_pat_11ABCDEFGHIJ1234567890"), "***");
+  assert.equal(redactSecrets("just a normal log line"), "just a normal log line");
 });
 
 test("the prompt carries every boundary the envelope declared", () => {

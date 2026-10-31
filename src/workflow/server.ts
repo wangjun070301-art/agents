@@ -6,6 +6,7 @@ import { Pipeline } from "./pipeline.js";
 import type { Stage } from "./contracts.js";
 import { readProject, writeProject, codexHomeFor, defaultCodexPath, type Project } from "./project.js";
 import { CodexAdapter } from "./adapters/codex.js";
+import { redactSecrets } from "./adapters/codex.js";
 import { Scheduler } from "./scheduler.js";
 import { LEGAL_TRANSITIONS, gateFor } from "./states.js";
 import { evaluateGate } from "./gates.js";
@@ -167,7 +168,7 @@ export function createPanel(options: ServerOptions): {
             },
             onOutput: (chunk) => {
               if (active?.taskId === task.task_id) {
-                active.lines.push(chunk);
+                active.lines.push(redactSecrets(chunk));
                 if (active.lines.length > 2000) active.lines.splice(0, active.lines.length - 2000);
               }
             },
@@ -455,99 +456,216 @@ const PANEL_HTML = String.raw`<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>流水线控制台</title>
 <style>
-:root{--bg:#f7f7f4;--panel:#fff;--ink:#1d221d;--muted:#767d74;--line:#e5e7e0;--green:#3b5c3e;--amber:#9a6a2c;--red:#9c4034;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
-*{box-sizing:border-box}body{margin:0;padding:32px;max-width:1180px}
-h1{font-size:22px;margin:0 0 6px;font-weight:650;letter-spacing:-.3px}
-.sub{font-size:12px;color:var(--muted);margin:0 0 26px}
-.row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:20px;align-items:start}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
-.head{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:10px}
-.head h2{font-size:14px;margin:0;font-weight:600}
-.body{padding:18px 20px}
-.stage{font-size:30px;font-weight:650;letter-spacing:-.6px;margin:0 0 4px}
-.badge{display:inline-block;font-size:11px;padding:4px 9px;border-radius:6px;background:#eef3ea;color:var(--green)}
-.badge.warn{background:#faf1de;color:var(--amber)}
-.badge.bad{background:#fbece9;color:var(--red)}
-.gates{display:flex;gap:6px;flex-wrap:wrap;margin:16px 0 0}
-.gate{font-size:11px;padding:5px 9px;border-radius:6px;background:#f2f4ee;color:var(--muted)}
-.gate.on{background:var(--green);color:#fff}
-.label{font-size:11px;letter-spacing:1.2px;color:var(--muted);margin:0 0 10px}
-.item{padding:12px 0;border-bottom:1px solid #f0f2ec;font-size:13px;line-height:1.7}
-.item:last-child{border-bottom:0}
-.item b{font-weight:600}
-.mono{font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;color:var(--muted);overflow-wrap:anywhere}
-textarea,input{width:100%;border:1px solid #dfe3da;border-radius:8px;padding:10px 11px;font:inherit;font-size:13px;background:#fcfdfb;outline:none}
-textarea:focus,input:focus{border-color:#8fa886;box-shadow:0 0 0 3px #eef3ea}
-textarea{min-height:64px;resize:vertical}
-button{border:0;border-radius:8px;padding:10px 16px;background:var(--green);color:#fff;font-size:13px;cursor:pointer}
-button.ghost{background:#f2f4ee;color:var(--ink);border:1px solid var(--line)}
-button:disabled{opacity:.4;cursor:default}
-.actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
-.msg{font-size:12px;margin-top:10px;line-height:1.7}
+:root{
+  --bg:#050B14;--bg2:#0A0F1D;--panel:rgba(13,22,38,.72);--panel2:rgba(16,28,48,.85);
+  --cyan:#00F2FE;--green:#10B981;--red:#FF4D4D;--orange:#FF9F43;
+  --ink:#D8F3FF;--muted:#7B8FA8;--line:rgba(0,242,254,.18);--line2:rgba(0,242,254,.35);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--ink);background:var(--bg)
+}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:
+  radial-gradient(1000px 500px at 15% -10%,rgba(0,242,254,.10),transparent 60%),
+  radial-gradient(700px 400px at 90% 0%,rgba(16,185,129,.07),transparent 55%),
+  var(--bg);
+  background-image:
+    linear-gradient(rgba(0,242,254,.03) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(0,242,254,.03) 1px,transparent 1px);
+  background-size:44px 44px}
+button,input,textarea,select{font:inherit}
+button{cursor:pointer;border:0}
+button:disabled{opacity:.35;cursor:default}
+a{color:var(--cyan)}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:rgba(0,242,254,.25);border-radius:4px}
+::-webkit-scrollbar-track{background:transparent}
+::selection{background:rgba(0,242,254,.3)}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 28px;border-bottom:1px solid var(--line);background:rgba(5,11,20,.8);backdrop-filter:blur(12px);position:sticky;top:0;z-index:20}
+.brand{display:flex;align-items:center;gap:14px}
+.brand .logo{width:36px;height:36px;border-radius:8px;background:linear-gradient(135deg,rgba(0,242,254,.2),rgba(0,242,254,.05));border:1px solid var(--line2);display:grid;place-items:center;font-weight:800;font-size:18px;color:var(--cyan);box-shadow:0 0 20px rgba(0,242,254,.25),inset 0 0 12px rgba(0,242,254,.15)}
+.brand h1{font-size:15px;margin:0;font-weight:700;letter-spacing:.5px;color:var(--ink)}
+.brand .tag{font-size:9px;color:var(--cyan);letter-spacing:2.5px;opacity:.8}
+.top-actions{display:flex;gap:8px;align-items:center}
+.status-pill{display:inline-flex;align-items:center;gap:7px;font-size:11px;padding:6px 14px;border-radius:999px;background:rgba(0,242,254,.08);border:1px solid var(--line2);letter-spacing:.5px}
+.status-pill .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green)}
+.status-pill.warn .dot{background:var(--orange);box-shadow:0 0 10px var(--orange);animation:pulse 1.2s ease-in-out infinite}
+.status-pill.bad .dot{background:var(--red);box-shadow:0 0 10px var(--red)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.wrap{padding:24px 28px 40px;max-width:1500px;margin:0 auto}
+.grid{display:grid;grid-template-columns:280px minmax(0,1fr) 320px;gap:16px;align-items:start}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;backdrop-filter:blur(8px);box-shadow:0 0 20px rgba(0,242,254,.04)}
+.head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);background:rgba(0,242,254,.04)}
+.head h2{font-size:12px;margin:0;font-weight:650;letter-spacing:1.5px;color:var(--cyan);text-transform:uppercase}
+.head .hint{font-size:11px;color:var(--muted)}
+.body{padding:16px}
+.badge{display:inline-block;font-size:10px;padding:3px 10px;border-radius:999px;background:rgba(16,185,129,.12);color:var(--green);border:1px solid rgba(16,185,129,.3);font-weight:600;letter-spacing:.5px}
+.badge.warn{background:rgba(255,159,67,.12);color:var(--orange);border-color:rgba(255,159,67,.35)}
+.badge.bad{background:rgba(255,77,77,.12);color:var(--red);border-color:rgba(255,77,77,.35)}
+.badge.idle{background:rgba(123,143,168,.1);color:var(--muted);border-color:var(--line)}
+.label{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan);opacity:.7;margin:0 0 8px;font-weight:600}
+input,textarea,select{width:100%;border:1px solid rgba(0,242,254,.2);border-radius:8px;padding:9px 12px;color:var(--ink);background:rgba(5,11,20,.6);outline:none;font-size:13px}
+input:focus,textarea:focus,select:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(0,242,254,.12),0 0 15px rgba(0,242,254,.15)}
+textarea{resize:vertical;line-height:1.6}
+input::placeholder,textarea::placeholder{color:#4A5B70}
+.btn{border-radius:8px;padding:9px 16px;font-size:12px;font-weight:700;letter-spacing:.5px;background:linear-gradient(135deg,rgba(0,242,254,.25),rgba(0,242,254,.1));color:var(--cyan);border:1px solid var(--line2);transition:all .15s}
+.btn:hover{box-shadow:0 0 18px rgba(0,242,254,.3)}
+.btn.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+.btn.ghost:hover{color:var(--ink);border-color:var(--line2)}
+.btn.danger{background:linear-gradient(135deg,rgba(255,77,77,.25),rgba(255,77,77,.1));color:var(--red);border-color:rgba(255,77,77,.4)}
+.btn.danger:hover{box-shadow:0 0 18px rgba(255,77,77,.3)}
+.btn.sm{padding:5px 10px;font-size:11px}
+.actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.msg{font-size:12px;margin-top:10px;line-height:1.6;color:var(--green)}
 .msg.err{color:var(--red)}
-.empty{padding:34px 20px;text-align:center;color:var(--muted);font-size:13px;line-height:1.9}
-.req{border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px;background:#fcfdfb}
+.empty{padding:32px 16px;text-align:center;color:var(--muted);font-size:12px;line-height:1.8}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+
+/* stage map */
+.stage-map{display:flex;flex-direction:column;padding:4px 2px}
+.stage-row{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:6px;position:relative;border:1px solid transparent}
+.stage-row.done{color:var(--muted)}
+.stage-row.current{background:rgba(0,242,254,.08);border-color:var(--line2);box-shadow:0 0 15px rgba(0,242,254,.15)}
+.stage-row.blocked{background:rgba(255,159,67,.08);border-color:rgba(255,159,67,.4)}
+.stage-idx{width:20px;height:20px;border-radius:50%;background:rgba(5,11,20,.7);border:1px solid var(--line2);display:grid;place-items:center;font-size:9px;color:var(--muted);flex-shrink:0}
+.stage-row.done .stage-idx{background:rgba(16,185,129,.15);border-color:var(--green);color:var(--green)}
+.stage-row.current .stage-idx{background:var(--cyan);border-color:var(--cyan);color:#050B14;font-weight:800;box-shadow:0 0 12px var(--cyan)}
+.stage-row.blocked .stage-idx{background:var(--orange);border-color:var(--orange);color:#050B14}
+.stage-name{font-size:12px;flex:1;letter-spacing:.3px}
+.stage-row.current .stage-name{font-weight:700;color:var(--cyan)}
+.stage-state{font-size:9px;color:var(--muted)}
+.stage-row.current .stage-state{color:var(--cyan)}
+.stage-row.blocked .stage-state{color:var(--orange)}
+.stage-connector{width:2px;height:5px;margin-left:17px;background:var(--line2)}
+.stage-row.done .stage-connector{background:var(--green)}
+
+/* gates */
+.gates{display:flex;gap:6px;flex-wrap:wrap}
+.gate{font-size:10px;padding:4px 9px;border-radius:5px;background:rgba(5,11,20,.6);border:1px solid var(--line);color:var(--muted);font-weight:700}
+.gate.on{background:rgba(16,185,129,.15);border-color:var(--green);color:var(--green);box-shadow:0 0 10px rgba(16,185,129,.2)}
+
+/* history timeline */
+.timeline{position:relative;padding-left:20px}
+.timeline::before{content:'';position:absolute;left:5px;top:4px;bottom:4px;width:2px;background:linear-gradient(var(--cyan),rgba(0,242,254,.05))}
+.tl-item{position:relative;padding:9px 0 9px 2px}
+.tl-item::before{content:'';position:absolute;left:-17px;top:15px;width:9px;height:9px;border-radius:50%;background:var(--bg2);border:2px solid var(--line2)}
+.tl-item.done::before{background:rgba(16,185,129,.2);border-color:var(--green);box-shadow:0 0 8px var(--green)}
+.tl-item.blocked::before{background:var(--orange);border-color:var(--orange);box-shadow:0 0 8px var(--orange)}
+.tl-item.failed::before{background:var(--red);border-color:var(--red);box-shadow:0 0 8px var(--red)}
+.tl-title{font-size:12px;font-weight:600;color:var(--ink)}
+.tl-meta{font-size:10px;color:var(--muted);margin-top:2px}
+.tl-note{font-size:11px;color:#9FB6CC;margin-top:4px;line-height:1.5}
+.tl-gate{display:inline-block;font-size:9px;padding:2px 7px;border-radius:4px;background:rgba(0,242,254,.1);color:var(--cyan);margin-left:6px;font-weight:700}
+.tl-gate.fail{background:rgba(255,77,77,.12);color:var(--red)}
+
+/* output */
+.output-box{background:rgba(3,8,16,.9);border:1px solid rgba(0,242,254,.15);border-radius:8px;padding:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#B8E6F5;box-shadow:inset 0 0 20px rgba(0,242,254,.05)}
+.output-box .out-stderr{color:var(--orange)}
+
+/* task list */
+.task-card{border:1px solid rgba(0,242,254,.15);border-radius:10px;padding:13px;margin-bottom:10px;background:rgba(5,11,20,.5)}
+.task-card:hover{border-color:var(--line2)}
+.task-card .t-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.task-card .t-id{font-size:11px;color:var(--cyan);font-weight:700}
+.task-card .t-role{font-size:9px;color:var(--muted);border:1px solid var(--line2);padding:1px 7px;border-radius:4px;letter-spacing:.5px}
+.task-card .t-obj{font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px}
+
+/* config forms */
+.req{border:1px solid rgba(0,242,254,.12);border-radius:10px;padding:12px;margin-bottom:10px;background:rgba(5,11,20,.45)}
 .item-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
-.ac-list{margin-top:12px;padding-left:12px;border-left:2px solid #eef1e9}
-.ac{border:1px solid #eef1e9;border-radius:8px;padding:10px;margin-bottom:8px;background:#fff}
-.req input,.req textarea{font-size:12px;padding:8px 10px}
-.req .label{margin:8px 0 4px;font-size:10px}
-@media(max-width:880px){.row{grid-template-columns:minmax(0,1fr)}body{padding:20px}}
+.item-head b{color:var(--cyan);font-size:12px}
+.ac-list{margin-top:10px;padding-left:12px;border-left:2px solid var(--line2)}
+.ac{border:1px solid rgba(0,242,254,.1);border-radius:8px;padding:9px;margin-bottom:8px;background:rgba(10,15,29,.5)}
+.req input,.req textarea{font-size:12px;padding:7px 10px}
+.req .label{margin:7px 0 3px;font-size:9px}
+
+@media(max-width:1200px){.grid{grid-template-columns:240px minmax(0,1fr)}.col:last-child{grid-column:1/-1}}
+@media(max-width:800px){.grid{grid-template-columns:minmax(0,1fr)}.topbar{padding:12px 16px}.wrap{padding:16px}.brand .tag{display:none}}
 </style></head><body>
-<h1>流水线控制台</h1>
-<p class="sub">配置项目、启动任务、推进阶段、人工放行。所有操作都记入历史。</p>
-<div class="row">
-  <section class="card"><div class="head"><h2>当前阶段</h2><span class="badge" id="state">读取中</span></div>
-    <div class="body"><p class="stage" id="stage">—</p><p class="label" id="stageHint"></p>
-      <div class="gates" id="gates"></div>
-      <p class="label" style="margin-top:20px">可推进到</p>
-      <div class="actions" id="nextStages"></div>
-      <div id="releaseBox" hidden>
-        <p class="label" style="margin-top:18px">放行回哪个阶段</p>
-        <input id="releaseTo" placeholder="例如 IMPLEMENT">
-        <textarea id="releaseNote" placeholder="为什么可以继续（会记入历史）"></textarea>
-        <div class="actions"><button id="releaseBtn">放行</button><button class="ghost" id="blockBtn">改为阻塞</button></div>
-      </div>
-      <div class="msg" id="actionMsg"></div>
-    </div>
-  </section>
-  <section class="card"><div class="head"><h2>阶段历史</h2><span class="badge" id="count">0</span></div>
-    <div class="body" id="history"><div class="empty">还没有阶段变化。</div></div>
-  </section>
+<div class="topbar">
+  <div class="brand"><div class="logo">AO</div><div><h1>AGENT ORCHESTRATOR</h1><div class="tag">CYBER-HUD · MULTI-AGENT DIRECT CONTROL</div></div></div>
+  <div class="top-actions">
+    <span class="status-pill"><span class="dot"></span>ONLINE 127.0.0.1:18493</span>
+    <span class="status-pill" id="runState">IDLE</span>
+    <button class="btn ghost sm" id="exportJson">导出</button>
+    <button class="btn ghost sm" id="importJson">导入</button>
+    <input id="importFile" type="file" accept="application/json,.json" hidden>
+  </div>
 </div>
-<div class="row" style="margin-top:20px">
-  <section class="card"><div class="head"><h2>项目配置</h2><span class="badge" id="projState">未配置</span></div>
-    <div class="body">
-      <p class="label">名称</p><input id="pName" placeholder="例如 fixture">
-      <p class="label" style="margin-top:12px">代码目录（绝对路径）</p><input id="pRepo" placeholder="C:\\path\\to\\repo">
-      <p class="label" style="margin-top:12px">模型</p><input id="pModel" value="deepseek-v4.1-flash-solo">
-      <p class="label" style="margin-top:12px">沙箱</p><input id="pSandbox" value="bypass" placeholder="read-only / workspace-write / bypass">
-      <p class="label" style="margin-top:18px">需求（每条需求至少一个验收项）</p>
-      <div id="reqList"></div>
-      <div class="actions"><button class="ghost" id="addReq">+ 加一条需求</button></div>
-      <p class="label" style="margin-top:18px">任务</p>
-      <div id="taskForm"></div>
-      <div class="actions"><button class="ghost" id="addTask">+ 加一个任务</button></div>
-      <div class="actions" style="margin-top:18px">
-        <button id="saveProject">保存配置</button>
-        <button class="ghost" id="exportJson">导出 JSON</button>
-        <button class="ghost" id="importJson">导入 JSON</button>
-        <input id="importFile" type="file" accept="application/json,.json" hidden>
-      </div>
-      <p class="label" style="margin-top:10px">阶段历史</p>
-      <input id="historyFilter" placeholder="筛选：输入阶段名或门禁号">
-      <div class="msg" id="projMsg"></div>
+<div class="wrap">
+  <div class="grid">
+    <!-- 左：Agent 矩阵监视舱 -->
+    <div class="col">
+      <section class="card">
+        <div class="head"><h2>Agent Matrix</h2><span class="badge" id="state">读取中</span></div>
+        <div class="body">
+          <div class="stage-map" id="stageMap"></div>
+          <p class="label" style="margin-top:14px">质量门禁</p>
+          <div class="gates" id="gates"></div>
+        </div>
+      </section>
+      <section class="card">
+        <div class="head"><h2>Intervention</h2><span class="badge">DIRECT</span></div>
+        <div class="body">
+          <p class="label">可推进到</p>
+          <div class="actions" id="nextStages"></div>
+          <div id="releaseBox" hidden>
+            <p class="label" style="margin-top:14px">放行回哪个阶段</p>
+            <input id="releaseTo" placeholder="例如 IMPLEMENT">
+            <textarea id="releaseNote" placeholder="为什么可以继续（会记入历史）"></textarea>
+            <div class="actions"><button class="btn" id="releaseBtn">放行</button><button class="btn danger" id="blockBtn">强制阻塞</button></div>
+          </div>
+          <div class="msg" id="actionMsg"></div>
+        </div>
+      </section>
     </div>
-  </section>
-  <section class="card"><div class="head"><h2>任务</h2><span class="badge" id="runState">空闲</span></div>
-    <div class="body" id="taskList"><div class="empty">先保存项目配置。</div></div>
-    <div class="body" style="padding-top:0"><button id="runPlanBtn" style="width:100%">跑整个计划（按依赖顺序）</button></div>
-    <div class="body" id="outputBox" style="padding-top:0" hidden><p class="label">实时输出</p><pre id="output" style="max-height:220px;overflow:auto"></pre><div class="actions"><button class="ghost" id="cancelBtn">取消当前任务</button></div></div>
-  </section>
+
+    <!-- 中：直接控制中心 -->
+    <div class="col">
+      <section class="card">
+        <div class="head"><h2>Direct Control</h2><span class="hint" id="stageHint"></span></div>
+        <div class="body">
+          <p class="label">项目配置</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div><p class="label">名称</p><input id="pName" placeholder="例如 fixture"></div>
+            <div><p class="label">沙箱</p><input id="pSandbox" value="bypass"></div>
+          </div>
+          <p class="label" style="margin-top:12px">代码目录</p><input id="pRepo" placeholder="C:\\path\\to\\repo">
+          <p class="label" style="margin-top:12px">模型</p><input id="pModel" value="deepseek-v4.1-flash-solo">
+          <p class="label" style="margin-top:14px">需求</p>
+          <div id="reqList"></div>
+          <div class="actions"><button class="btn ghost sm" id="addReq">+ 需求</button></div>
+          <p class="label" style="margin-top:14px">任务</p>
+          <div id="taskForm"></div>
+          <div class="actions"><button class="btn ghost sm" id="addTask">+ 任务</button><button class="btn" id="saveProject">保存配置</button></div>
+          <div class="msg" id="projMsg"></div>
+        </div>
+      </section>
+      <section class="card">
+        <div class="head"><h2>Task Queue</h2><span class="badge idle" id="projState">未配置</span></div>
+        <div class="body" id="taskList"><div class="empty">先保存项目配置。</div></div>
+        <div class="body" style="padding-top:0"><button class="btn" id="runPlanBtn" style="width:100%">▶ 执行整个工作流</button></div>
+      </section>
+      <section class="card" id="outputCard" hidden>
+        <div class="head"><h2>Live Terminal</h2><div class="actions" style="margin:0"><button class="btn danger sm" id="cancelBtn">中断</button></div></div>
+        <div class="body"><div class="output-box" id="output"></div></div>
+      </section>
+    </div>
+
+    <!-- 右：交互终端 + 历史 -->
+    <div class="col">
+      <section class="card">
+        <div class="head"><h2>History</h2><span class="badge" id="count">0</span></div>
+        <div class="body" style="padding:12px">
+          <input id="historyFilter" placeholder="筛选：阶段 / 门禁 / 备注">
+          <div class="timeline" id="history" style="margin-top:8px"><div class="empty">还没有阶段变化。</div></div>
+        </div>
+      </section>
+      <section class="card">
+        <div class="head"><h2>Run Records</h2><span class="badge" id="taskCount">0</span></div>
+        <div class="body" id="tasks"><div class="empty">还没有任务记录。</div></div>
+      </section>
+    </div>
+  </div>
 </div>
-<section class="card" style="margin-top:20px"><div class="head"><h2>任务记录</h2><span class="badge" id="taskCount">0</span></div>
-  <div class="body" id="tasks"><div class="empty">还没有任务记录。命令行跑一次任务后，这里会出现。</div></div>
-</section>
 <script>
 const $=id=>document.getElementById(id);
 const stageNames={INTAKE:'接单',CLARIFY:'澄清',BASELINE:'基线',SPEC:'需求规格',PLAN:'计划',DISPATCH:'派工',IMPLEMENT:'实现',REVIEW:'审查',VERIFY:'验证',INTEGRATE:'集成',ACCEPT:'验收',DELIVER:'交付',ARCHIVE:'归档',BLOCKED:'已阻塞'};
@@ -557,9 +675,9 @@ let lastBlockedFrom=null;
 let projectLoaded=false;
 async function load(){
   const r=await fetch('/api/state');const s=await r.json();
-  $('stage').textContent=stageNames[s.stage]||s.stage;
   $('stageHint').textContent=s.stage==='BLOCKED'?'等待人工处理':'当前阶段（代码：'+s.stage+'）';
   const badge=$('state');badge.textContent=s.blocked?'已阻塞':'进行中';badge.className='badge'+(s.blocked?' warn':'');
+  renderStageMap(s);
   const gates=$('gates');gates.replaceChildren();
   for(const g of gateOrder){const on=s.passedGates.includes(g);gates.append(el('span','gate'+(on?' on':''),g+(on?' ✓':'')));}
   const lastBlocked=[...s.history].reverse().find(h=>h.to==='BLOCKED');
@@ -606,6 +724,23 @@ async function load(){
     if(task.failure){item.append(el('div','mono','失败：'+(task.failure.reason||'')+' — '+(task.failure.detail||'')));}
     t.append(item);
   }
+}
+function renderStageMap(s){
+  const map=$('stageMap');if(!map)return;
+  map.replaceChildren();
+  const order=Object.keys(stageNames).filter(k=>k!=='BLOCKED');
+  const idx=order.indexOf(s.stage);
+  order.forEach((name,i)=>{
+    const row=el('div','stage-row');
+    if(i<idx)row.className='stage-row done';
+    else if(i===idx)row.className='stage-row current';
+    if(s.stage==='BLOCKED'&&i===idx-1)row.className='stage-row blocked';
+    row.append(el('span','stage-idx',String(i+1).padStart(2,'0')));
+    row.append(el('span','stage-name',stageNames[name]));
+    if(i===idx)row.append(el('span','stage-state','ACTIVE'));
+    map.append(row);
+    if(i<order.length-1)map.append(el('div','stage-connector'));
+  });
 }
 /**
  * The form keeps its own model. Loading from the server only happens once, so
@@ -719,7 +854,7 @@ function renderTasks(s){
 }
 function renderRunning(running,lastRun,outputLines){
   const badge=$('runState');
-  const outBox=$('outputBox');
+  const outBox=$('outputCard');
   if(running){
     badge.textContent='运行中：'+running.taskId+(running.cancelling?'（正在取消）':'');badge.className='badge warn';
     outBox.hidden=false;$('cancelBtn').disabled=running.cancelling;

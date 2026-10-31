@@ -739,3 +739,16 @@ export class CodexAdapter implements WorkflowAdapter {
     return this.discrepancies.get(taskId) ?? [];
   }
 }
+
+/**
+ * Mask secret-looking values before they reach the UI. Token-shaped strings
+ * (gho_/github_pat_ prefixes, bearer tokens, sk-/pk- keys, api_key= pairs)
+ * are replaced with *** so a pasted log cannot leak a credential.
+ */
+export function redactSecrets(text: string): string {
+  return text
+    .replace(/\b(gho|ghp|ghs|github_pat)_[A-Za-z0-9_]+/g, "***")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer ***")
+    .replace(/\b(sk|pk|rk)-[A-Za-z0-9]{20,}/g, "$1-***")
+    .replace(/\b(api[_-]?key|token|secret)\s*[=:]\s*["'"'"']?[A-Za-z0-9._~+/=-]{8,}["'"'"']?/gi, "$1=***");
+}

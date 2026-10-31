@@ -9,6 +9,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "app": "electron app/main.cjs",
+    "app:build": "tsc -p tsconfig.json && electron app/main.cjs",
     "start": "node dist/server.js",
     "hub": "./bin/agent-hub serve",
     "hub:mcp": "./bin/agent-hub-mcp",
@@ -29,6 +31,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.7.2",
+    "electron": "^45.2.1",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   }
