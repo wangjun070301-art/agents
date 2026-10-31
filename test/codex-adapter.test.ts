@@ -290,6 +290,10 @@ test("evidence is collected from what the child actually reported", async () => 
     codexPath: process.execPath,
     codexHome: home,
     model: "m",
+    // This test exercises the reported-evidence path. Observation would
+    // snapshot the real cwd, find nothing changed, and override the claim —
+    // which is correct behaviour but not what this case is about.
+    observeWorktree: false,
     spawn: async () => {
       const runDir = path.join(home, "runs", envelope.task_id);
       fs.mkdirSync(runDir, { recursive: true });
