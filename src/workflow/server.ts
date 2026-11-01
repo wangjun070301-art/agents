@@ -3,13 +3,24 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { Pipeline } from "./pipeline.js";
-import type { Stage } from "./contracts.js";
-import { readProject, writeProject, codexHomeFor, defaultCodexPath, type Project } from "./project.js";
+import type { Stage, TaskEnvelope } from "./contracts.js";
+import {
+  readProject,
+  writeProject,
+  codexHomeFor,
+  defaultCodexPath,
+  describeProjectError,
+  type Project,
+} from "./project.js";
 import { CodexAdapter } from "./adapters/codex.js";
 import { redactSecrets } from "./adapters/codex.js";
 import { Scheduler } from "./scheduler.js";
 import { LEGAL_TRANSITIONS, gateFor } from "./states.js";
 import { evaluateGate } from "./gates.js";
+import { detectEnvironment } from "./environment.js";
+import { detectAgents, readBindings, writeBindings, agentForRole, ROLES, type RoleBindings } from "./agents.js";
+import { ClaudeAdapter } from "./adapters/claude.js";
+import type { WorkflowAdapter } from "./adapters.js";
 
 /**
  * A small local control panel for one pipeline.
@@ -61,10 +72,20 @@ export function createPanel(options: ServerOptions): {
   const pipeline = Pipeline.restore(stateFile);
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 18493;
+  /**
+   * Probed once at startup. Codex installs and auth do not change while the
+   * panel is open, and re-probing on every 3-second poll would spawn `where`.
+   */
+  const environment = detectEnvironment();
+  /**
+   * Agents are probed once too: the binaries and their versions do not change
+   * while the panel is open.
+   */
+  const agents = detectAgents();
   /** A run in flight, with the adapter so the UI can cancel it. */
   let active: {
     taskId: string;
-    adapter: CodexAdapter | null;
+    adapter: WorkflowAdapter | null;
     /** The task the adapter is actually running; a plan changes this per task. */
     currentTask: string | null;
     lines: string[];
@@ -87,6 +108,9 @@ export function createPanel(options: ServerOptions): {
     history: pipeline.history,
     tasks: readTaskRecords(stateDir),
     project: readProject(stateDir) ?? null,
+    environment,
+    agents,
+    bindings: readBindings(stateDir),
     running: active
       ? {
           taskId: active.taskId,
@@ -158,6 +182,17 @@ export function createPanel(options: ServerOptions): {
         .then((body) => {
           const project = writeProject(stateDir, body);
           send(res, 200, JSON.stringify({ ok: true, project }));
+        })
+        .catch((error: unknown) => {
+          send(res, 400, JSON.stringify({ error: describeProjectError(error) }));
+        });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/agents") {
+      readJson(req)
+        .then((body) => {
+          const bindings = writeBindings(stateDir, body);
+          send(res, 200, JSON.stringify({ ok: true, bindings }));
         })
         .catch((error: unknown) => {
           send(res, 400, JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
@@ -393,18 +428,42 @@ function readJson(req: http.IncomingMessage): Promise<Record<string, unknown> | 
  * stage gate judge it. Returns whatever the scheduler decided; the caller only
  * records it.
  */
-async function executeTask(
+/**
+ * The agent that runs a task, chosen by the role it was given.
+ *
+ * A task's role is a capability slot; the binding says which agent fills that
+ * slot. Unbound roles fall back to Codex, so an untouched install behaves
+ * exactly as before.
+ */
+function buildAdapterFor(
   project: Project,
   task: Project["tasks"][number],
   stateDir: string,
   codexPath: string | undefined,
-  hooks?: {
-    onCreated?: (adapter: CodexAdapter) => void;
-    onTaskStart?: (taskId: string) => void;
-    isCancelled?: () => boolean;
-    onOutput?: (chunk: string) => void;
-  },
-): Promise<{ ok: boolean; failure?: unknown }> {
+  onOutput?: (chunk: string) => void,
+): WorkflowAdapter {
+  const bindings = readBindings(stateDir);
+  const agent = agentForRole(bindings, task.role);
+
+  if (agent === "claude") {
+    const binary = detectAgents().find((a) => a.id === "claude")?.binary;
+    if (!binary) {
+      throw new Error("角色 " + task.role + " 绑定了 Claude Code，但这台机器上找不到 claude 命令");
+    }
+    return new ClaudeAdapter({
+      claudePath: binary,
+      repoPath: task.repo_path,
+      model: project.model,
+      ...(onOutput ? { onOutput } : {}),
+    });
+  }
+
+  if (agent !== "codex") {
+    throw new Error(
+      "角色 " + task.role + " 绑定了 " + agent + "，这个 agent 在当前机器上还不能执行任务",
+    );
+  }
+
   const home = codexHomeFor(stateDir);
   fs.mkdirSync(home, { recursive: true });
   // The adapter needs a writable CODEX_HOME with auth in it. Copy the user's
@@ -414,15 +473,29 @@ async function executeTask(
     const to = path.join(home, file);
     if (fs.existsSync(from) && !fs.existsSync(to)) fs.copyFileSync(from, to);
   }
-
-  const adapter = new CodexAdapter({
+  return new CodexAdapter({
     codexPath: codexPath ?? defaultCodexPath(),
     codexHome: home,
     model: project.model,
     sandbox: project.sandbox,
     observeWorktree: true,
-    ...(hooks?.onOutput ? { onOutput: hooks.onOutput } : {}),
+    ...(onOutput ? { onOutput } : {}),
   });
+}
+
+async function executeTask(
+  project: Project,
+  task: Project["tasks"][number],
+  stateDir: string,
+  codexPath: string | undefined,
+  hooks?: {
+    onCreated?: (adapter: WorkflowAdapter) => void;
+    onTaskStart?: (taskId: string) => void;
+    isCancelled?: () => boolean;
+    onOutput?: (chunk: string) => void;
+  },
+): Promise<{ ok: boolean; failure?: unknown }> {
+  const adapter = buildAdapterFor(project, task, stateDir, codexPath, hooks?.onOutput);
   hooks?.onCreated?.(adapter);
   const pipeline = Pipeline.restore(path.join(stateDir, "pipeline.json"));
   const scheduler = new Scheduler({
@@ -458,32 +531,70 @@ async function executeTask(
  * Run every task in dependency order with the real scheduler. Returns the
  * plan outcome so the panel can show which tasks completed and which did not.
  */
+/**
+ * One adapter that dispatches each task to the agent bound to its role.
+ *
+ * A plan mixes roles, so a single concrete adapter cannot serve it. This
+ * wrapper builds the right adapter per task, keeps it for resume and cancel,
+ * and forwards evidence to whichever adapter actually ran the task.
+ */
+function roleRoutingAdapter(
+  project: Project,
+  stateDir: string,
+  codexPath: string | undefined,
+  onOutput?: (chunk: string) => void,
+): WorkflowAdapter & { cancel(taskId: string): Promise<void> } {
+  const used = new Map<string, WorkflowAdapter>();
+
+  return {
+    id: "role-router",
+    label: "按角色分派",
+    async capabilityCheck() {
+      return {
+        adapter_id: "role-router",
+        version: "1",
+        available: true,
+        models: [],
+        working_directories: [project.repo_path],
+        can_run_tests: true,
+        can_resume: true,
+        detail: "按每个任务的角色选择 agent",
+      };
+    },
+    async execute(envelope: TaskEnvelope) {
+      const adapter = buildAdapterFor(project, envelope, stateDir, codexPath, onOutput);
+      used.set(envelope.task_id, adapter);
+      return adapter.execute(envelope);
+    },
+    async resume(taskId: string, feedback: string) {
+      const adapter = used.get(taskId);
+      if (!adapter) throw new Error(`没有记录 ${taskId} 用的是哪个 agent`);
+      return adapter.resume(taskId, feedback);
+    },
+    async cancel(taskId: string) {
+      await used.get(taskId)?.cancel(taskId);
+    },
+    async collectEvidence(taskId: string) {
+      const adapter = used.get(taskId);
+      if (!adapter) throw new Error(`没有记录 ${taskId} 用的是哪个 agent`);
+      return adapter.collectEvidence(taskId);
+    },
+  };
+}
+
 async function executePlan(
   project: Project,
   stateDir: string,
   codexPath: string | undefined,
   hooks?: {
-    onCreated?: (adapter: CodexAdapter) => void;
+    onCreated?: (adapter: WorkflowAdapter) => void;
     onTaskStart?: (taskId: string) => void;
     isCancelled?: () => boolean;
     onOutput?: (chunk: string) => void;
   },
 ): Promise<{ completed: string[]; failed: Array<{ taskId: string; reason: string }>; skipped: Array<{ taskId: string; because: string }> }> {
-  const home = codexHomeFor(stateDir);
-  fs.mkdirSync(home, { recursive: true });
-  for (const file of ["auth.json", "config.toml", "cc-switch-model-catalog.json"]) {
-    const from = path.join(process.env.USERPROFILE ?? "", ".codex", file);
-    const to = path.join(home, file);
-    if (fs.existsSync(from) && !fs.existsSync(to)) fs.copyFileSync(from, to);
-  }
-  const adapter = new CodexAdapter({
-    codexPath: codexPath ?? defaultCodexPath(),
-    codexHome: home,
-    model: project.model,
-    sandbox: project.sandbox,
-    observeWorktree: true,
-    ...(hooks?.onOutput ? { onOutput: hooks.onOutput } : {}),
-  });
+  // A plan mixes roles, so the adapter is chosen per task, not once up front.
+  const adapter = roleRoutingAdapter(project, stateDir, codexPath, hooks?.onOutput);
   hooks?.onCreated?.(adapter);
   const pipeline = Pipeline.restore(path.join(stateDir, "pipeline.json"));
   const scheduler = new Scheduler({
@@ -679,6 +790,28 @@ input::placeholder,textarea::placeholder{color:#4E6076}
   .grid2{grid-template-columns:1fr}
   .brand .tag{display:none}
 }
+
+/* agent 列表与角色分派 */
+.agent-list{display:flex;flex-direction:column;gap:8px}
+.agent{display:flex;align-items:center;gap:12px;padding:11px 14px;
+  border:1px solid var(--line);border-radius:9px;background:#0E1620}
+.agent .name{font-weight:600;font-size:13px;min-width:130px}
+.agent .ver{font-size:11px;color:var(--muted);font-family:Consolas,monospace}
+.agent .why{font-size:11px;color:var(--warn);flex:1}
+.agent.ok{border-color:rgba(74,222,128,.3)}
+.agent.off{opacity:.62}
+.dot-ok{width:8px;height:8px;border-radius:50%;background:var(--ok);flex-shrink:0}
+.dot-off{width:8px;height:8px;border-radius:50%;background:#5A6B7D;flex-shrink:0}
+
+.role-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.role-row{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:#0E1620}
+.role-row .rname{font-size:13px}
+.role-row select{width:auto;min-width:140px;padding:6px 10px;font-size:12px}
+
+@media(max-width:820px){
+  .role-grid{grid-template-columns:1fr}
+}
 </style></head><body>
 <div class="topbar">
   <div class="brand"><div class="logo">AO</div><div><h1>流水线控制台</h1><div class="tag">四步走完一个任务</div></div></div>
@@ -693,6 +826,22 @@ input::placeholder,textarea::placeholder{color:#4E6076}
 
 <div class="wrap">
 
+  <!-- 第 0 步：选 agent -->
+  <section class="card step">
+    <div class="head">
+      <div class="step-title"><span class="step-no">0</span><h2>谁来干活</h2></div>
+      <span class="hint">本机已安装的 agent</span>
+    </div>
+    <div class="body">
+      <p class="lead">每个角色交给一个 agent。不选就默认用 Codex。</p>
+      <div class="agent-list" id="agentList"></div>
+      <p class="label" style="margin-top:16px">角色分派</p>
+      <div class="role-grid" id="roleGrid"></div>
+      <div class="actions"><button class="btn" id="saveAgents">保存分派</button></div>
+      <div class="msg" id="agentMsg"></div>
+    </div>
+  </section>
+
   <!-- 第 1 步 -->
   <section class="card step">
     <div class="head">
@@ -702,6 +851,8 @@ input::placeholder,textarea::placeholder{color:#4E6076}
     <div class="body">
       <p class="lead">先告诉它要在哪个代码目录里干活。</p>
 
+      <div class="env" id="envBox">正在检测本机环境…</div>
+
       <div class="grid2">
         <div>
           <p class="label">项目名称</p>
@@ -709,9 +860,9 @@ input::placeholder,textarea::placeholder{color:#4E6076}
           <p class="hintline">只用来显示，不影响执行。</p>
         </div>
         <div>
-          <p class="label">沙箱</p>
-          <input id="pSandbox" value="bypass">
-          <p class="hintline">这台机器必须填 bypass，否则子进程无法执行命令。</p>
+          <p class="label">权限模式</p>
+          <select id="pSandbox"></select>
+          <p class="hintline">bypass 让子进程能执行命令；其余两种只能读或只能改工作区。</p>
         </div>
       </div>
 
@@ -720,8 +871,8 @@ input::placeholder,textarea::placeholder{color:#4E6076}
       <p class="hintline">例：<code>C:\work\myproj</code>。填错会直接报「目录不存在」。</p>
 
       <p class="label">模型</p>
-      <input id="pModel" value="deepseek-v4.1-flash-solo">
-      <p class="hintline">用你代理里实际可用的模型 ID，不确定就保持默认。</p>
+      <select id="pModel"></select>
+      <p class="hintline" id="modelHint">从本机模型目录读取，不用手填。</p>
 
       <div class="actions"><button class="btn" id="saveProject">保存项目</button></div>
       <div class="msg" id="projMsg"></div>
@@ -819,6 +970,59 @@ const hint=(text)=>el('p','hintline',text);
 let lastBlockedFrom=null;
 let projectLoaded=false;
 let historyFilterValue='';
+let agentsLoaded=false;
+let roleDraft={};
+
+/* ---------- 第 0 步：agent 与角色 ---------- */
+const roleNames={analyst:'分析',architect:'架构',developer:'实现',reviewer:'审查',tester:'测试',integrator:'集成'};
+
+function renderAgents(s){
+  const list=$('agentList');
+  if(!s.agents){list.textContent='读取中…';return;}
+  list.replaceChildren();
+  for(const a of s.agents){
+    const row=el('div','agent '+(a.available?'ok':'off'));
+    row.append(el('span',a.available?'dot-ok':'dot-off'));
+    row.append(el('span','name',a.label));
+    if(a.version)row.append(el('span','ver',a.version));
+    if(!a.available)row.append(el('span','why',a.reason));
+    list.append(row);
+  }
+
+  const grid=$('roleGrid');
+  if(!agentsLoaded){
+    roleDraft={...(s.bindings||{})};
+    grid.replaceChildren();
+    for(const role of Object.keys(roleNames)){
+      const row=el('div','role-row');
+      row.append(el('span','rname',roleNames[role]));
+      const sel=el('select');
+      const def=el('option',null,'默认（Codex）');def.value='';sel.append(def);
+      for(const a of s.agents){
+        const o=el('option',null,a.label+(a.available?'':'（不可用）'));
+        o.value=a.id;
+        sel.append(o);
+      }
+      sel.value=roleDraft[role]||'';
+      sel.onchange=()=>{
+        if(sel.value)roleDraft[role]=sel.value;else delete roleDraft[role];
+      };
+      row.append(sel);
+      grid.append(row);
+    }
+    agentsLoaded=true;
+  }
+}
+
+$('saveAgents').onclick=async()=>{
+  const m=$('agentMsg');
+  const r=await fetch('/api/agents',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(roleDraft)});
+  const v=await r.json();
+  if(!r.ok){m.className='msg err';m.textContent=v.error||'保存失败';return;}
+  m.className='msg';m.textContent='分派已保存';
+  agentsLoaded=false;
+  load();
+};
 
 /* ---------- 第 1 步：项目 ---------- */
 function renderProject(project){
@@ -839,6 +1043,19 @@ function renderProject(project){
 
 $('saveProject').onclick=async()=>{
   const m=$('projMsg');
+  // Check what the form already knows before spending a round trip. The
+  // server validates too, but a blank form should say which box is blank.
+  const missing=[];
+  if(!$('pName').value.trim())missing.push('项目名称');
+  if(!$('pRepo').value.trim())missing.push('代码目录');
+  if(!$('pModel').value.trim())missing.push('模型');
+  if(!form.requirements.length)missing.push('至少一条需求');
+  if(!form.tasks.length)missing.push('至少一个任务');
+  if(missing.length){
+    m.className='msg err';
+    m.textContent='还缺：'+missing.join('、')+'。填完再保存。';
+    return;
+  }
   const requirements=form.requirements.map(r=>({
     ...r,
     acceptance:(r.acceptance||[]).map(a=>({
@@ -871,6 +1088,23 @@ $('saveProject').onclick=async()=>{
 
 /* 把后端英文报错翻成人话 */
 function translateError(text){
+  // A Zod dump arrives as a JSON array; the server already turns it into
+  // sentences, but an older server may still send the raw form.
+  if(/^\s*\[/.test(text)){
+    try{
+      const issues=JSON.parse(text);
+      const labels={name:'项目名称',repo_path:'代码目录',model:'模型',sandbox:'沙箱',
+                    requirements:'需求',tasks:'任务'};
+      const parts=issues.map(i=>{
+        const k=String(i.path?.[0]??'');
+        const label=labels[k]||k;
+        return i.code==='too_small'
+          ?(i.type==='array'?label+'至少要有 1 条':label+'不能为空')
+          :label;
+      });
+      if(parts.length)return '还缺：'+parts.join('、')+'。';
+    }catch{}
+  }
   if(/repo_path does not exist/.test(text))return '代码目录不存在，检查路径是否填对。';
   if(/no project configured/.test(text))return '还没有保存项目，先完成第 1 步。';
   if(/a run is already in progress/.test(text))return '已有任务在跑，等它结束或点中断。';
@@ -1115,6 +1349,8 @@ function renderStageMap(s){
 
 async function load(){
   const r=await fetch('/api/state');const s=await r.json();
+
+  renderAgents(s);
 
   $('stageHint').textContent=s.stage==='BLOCKED'
     ?'流水线已阻塞，等你在下面放行。'

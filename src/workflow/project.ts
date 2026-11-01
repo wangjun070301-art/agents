@@ -23,6 +23,42 @@ export type Project = z.infer<typeof projectSchema>;
 
 export const projectFile = (stateDir: string): string => path.join(stateDir, "project.json");
 
+/**
+ * Turn a Zod error into one sentence a person can act on.
+ *
+ * Zod's own message is a JSON dump of every issue, which reached the panel
+ * verbatim when someone saved an empty form. Field paths are mapped to the
+ * labels the form actually shows.
+ */
+const FIELD_LABELS: Record<string, string> = {
+  name: "项目名称",
+  repo_path: "代码目录",
+  model: "模型",
+  sandbox: "沙箱",
+  requirements: "需求",
+  tasks: "任务",
+};
+
+export function describeProjectError(error: unknown): string {
+  if (error instanceof z.ZodError) {
+    const parts = error.issues.map((issue) => {
+      const key = String(issue.path[0] ?? "");
+      const label = FIELD_LABELS[key] ?? key;
+      if (issue.code === "too_small") {
+        if (issue.type === "array") return `${label}至少要有 1 条`;
+        return `${label}不能为空`;
+      }
+      if (issue.code === "too_big") return `${label}太长了`;
+      if (issue.code === "invalid_enum_value") return `${label}的取值不对`;
+      if (issue.code === "invalid_type") return `${label}格式不对`;
+      if (issue.code === "unrecognized_keys") return `${label}里有不认识的字段`;
+      return `${label}：${issue.message}`;
+    });
+    return parts.join("；");
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function readProject(stateDir: string): Project | undefined {
   const file = projectFile(stateDir);
   if (!fs.existsSync(file)) return undefined;

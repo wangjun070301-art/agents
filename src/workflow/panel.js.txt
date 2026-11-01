@@ -6,6 +6,59 @@ const hint=(text)=>el('p','hintline',text);
 let lastBlockedFrom=null;
 let projectLoaded=false;
 let historyFilterValue='';
+let agentsLoaded=false;
+let roleDraft={};
+
+/* ---------- 第 0 步：agent 与角色 ---------- */
+const roleNames={analyst:'分析',architect:'架构',developer:'实现',reviewer:'审查',tester:'测试',integrator:'集成'};
+
+function renderAgents(s){
+  const list=$('agentList');
+  if(!s.agents){list.textContent='读取中…';return;}
+  list.replaceChildren();
+  for(const a of s.agents){
+    const row=el('div','agent '+(a.available?'ok':'off'));
+    row.append(el('span',a.available?'dot-ok':'dot-off'));
+    row.append(el('span','name',a.label));
+    if(a.version)row.append(el('span','ver',a.version));
+    if(!a.available)row.append(el('span','why',a.reason));
+    list.append(row);
+  }
+
+  const grid=$('roleGrid');
+  if(!agentsLoaded){
+    roleDraft={...(s.bindings||{})};
+    grid.replaceChildren();
+    for(const role of Object.keys(roleNames)){
+      const row=el('div','role-row');
+      row.append(el('span','rname',roleNames[role]));
+      const sel=el('select');
+      const def=el('option',null,'默认（Codex）');def.value='';sel.append(def);
+      for(const a of s.agents){
+        const o=el('option',null,a.label+(a.available?'':'（不可用）'));
+        o.value=a.id;
+        sel.append(o);
+      }
+      sel.value=roleDraft[role]||'';
+      sel.onchange=()=>{
+        if(sel.value)roleDraft[role]=sel.value;else delete roleDraft[role];
+      };
+      row.append(sel);
+      grid.append(row);
+    }
+    agentsLoaded=true;
+  }
+}
+
+$('saveAgents').onclick=async()=>{
+  const m=$('agentMsg');
+  const r=await fetch('/api/agents',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(roleDraft)});
+  const v=await r.json();
+  if(!r.ok){m.className='msg err';m.textContent=v.error||'保存失败';return;}
+  m.className='msg';m.textContent='分派已保存';
+  agentsLoaded=false;
+  load();
+};
 
 /* ---------- 第 1 步：项目 ---------- */
 function renderProject(project){
@@ -26,6 +79,19 @@ function renderProject(project){
 
 $('saveProject').onclick=async()=>{
   const m=$('projMsg');
+  // Check what the form already knows before spending a round trip. The
+  // server validates too, but a blank form should say which box is blank.
+  const missing=[];
+  if(!$('pName').value.trim())missing.push('项目名称');
+  if(!$('pRepo').value.trim())missing.push('代码目录');
+  if(!$('pModel').value.trim())missing.push('模型');
+  if(!form.requirements.length)missing.push('至少一条需求');
+  if(!form.tasks.length)missing.push('至少一个任务');
+  if(missing.length){
+    m.className='msg err';
+    m.textContent='还缺：'+missing.join('、')+'。填完再保存。';
+    return;
+  }
   const requirements=form.requirements.map(r=>({
     ...r,
     acceptance:(r.acceptance||[]).map(a=>({
@@ -58,6 +124,23 @@ $('saveProject').onclick=async()=>{
 
 /* 把后端英文报错翻成人话 */
 function translateError(text){
+  // A Zod dump arrives as a JSON array; the server already turns it into
+  // sentences, but an older server may still send the raw form.
+  if(/^\s*\[/.test(text)){
+    try{
+      const issues=JSON.parse(text);
+      const labels={name:'项目名称',repo_path:'代码目录',model:'模型',sandbox:'沙箱',
+                    requirements:'需求',tasks:'任务'};
+      const parts=issues.map(i=>{
+        const k=String(i.path?.[0]??'');
+        const label=labels[k]||k;
+        return i.code==='too_small'
+          ?(i.type==='array'?label+'至少要有 1 条':label+'不能为空')
+          :label;
+      });
+      if(parts.length)return '还缺：'+parts.join('、')+'。';
+    }catch{}
+  }
   if(/repo_path does not exist/.test(text))return '代码目录不存在，检查路径是否填对。';
   if(/no project configured/.test(text))return '还没有保存项目，先完成第 1 步。';
   if(/a run is already in progress/.test(text))return '已有任务在跑，等它结束或点中断。';
@@ -302,6 +385,8 @@ function renderStageMap(s){
 
 async function load(){
   const r=await fetch('/api/state');const s=await r.json();
+
+  renderAgents(s);
 
   $('stageHint').textContent=s.stage==='BLOCKED'
     ?'流水线已阻塞，等你在下面放行。'

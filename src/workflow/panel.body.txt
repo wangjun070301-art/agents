@@ -11,6 +11,22 @@
 
 <div class="wrap">
 
+  <!-- 第 0 步：选 agent -->
+  <section class="card step">
+    <div class="head">
+      <div class="step-title"><span class="step-no">0</span><h2>谁来干活</h2></div>
+      <span class="hint">本机已安装的 agent</span>
+    </div>
+    <div class="body">
+      <p class="lead">每个角色交给一个 agent。不选就默认用 Codex。</p>
+      <div class="agent-list" id="agentList"></div>
+      <p class="label" style="margin-top:16px">角色分派</p>
+      <div class="role-grid" id="roleGrid"></div>
+      <div class="actions"><button class="btn" id="saveAgents">保存分派</button></div>
+      <div class="msg" id="agentMsg"></div>
+    </div>
+  </section>
+
   <!-- 第 1 步 -->
   <section class="card step">
     <div class="head">
@@ -20,6 +36,8 @@
     <div class="body">
       <p class="lead">先告诉它要在哪个代码目录里干活。</p>
 
+      <div class="env" id="envBox">正在检测本机环境…</div>
+
       <div class="grid2">
         <div>
           <p class="label">项目名称</p>
@@ -27,9 +45,9 @@
           <p class="hintline">只用来显示，不影响执行。</p>
         </div>
         <div>
-          <p class="label">沙箱</p>
-          <input id="pSandbox" value="bypass">
-          <p class="hintline">这台机器必须填 bypass，否则子进程无法执行命令。</p>
+          <p class="label">权限模式</p>
+          <select id="pSandbox"></select>
+          <p class="hintline">bypass 让子进程能执行命令；其余两种只能读或只能改工作区。</p>
         </div>
       </div>
 
@@ -38,8 +56,8 @@
       <p class="hintline">例：<code>C:\work\myproj</code>。填错会直接报「目录不存在」。</p>
 
       <p class="label">模型</p>
-      <input id="pModel" value="deepseek-v4.1-flash-solo">
-      <p class="hintline">用你代理里实际可用的模型 ID，不确定就保持默认。</p>
+      <select id="pModel"></select>
+      <p class="hintline" id="modelHint">从本机模型目录读取，不用手填。</p>
 
       <div class="actions"><button class="btn" id="saveProject">保存项目</button></div>
       <div class="msg" id="projMsg"></div>
