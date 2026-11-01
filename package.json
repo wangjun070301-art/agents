@@ -4,6 +4,7 @@
   "private": true,
   "description": "Local Agent Hub with HTTP, MCP, SDK, CLI and a workbench; WorkBuddy executor and existing Harness bridge.",
   "type": "module",
+  "main": "app/main.cjs",
   "engines": {
     "node": ">=22.13.0"
   },

@@ -1,5 +1,6 @@
 const { app, BrowserWindow } = require("electron");
 const path = require("node:path");
+const fs = require("node:fs");
 const { resolveStateDir, startPanel } = require("./panel-host.cjs");
 
 /**
@@ -8,7 +9,17 @@ const { resolveStateDir, startPanel } = require("./panel-host.cjs");
  * shuts the server down.
  */
 
-const repoRoot = path.resolve(__dirname, "..");
+/**
+ * Where the panel's own files live.
+ *
+ * In the source tree `main.cjs` sits in `app/`, one level below `dist/`, so
+ * the root is its parent. In a packaged build the whole project is copied into
+ * `resources/app/`, and `__dirname` is already the root. Probing for the
+ * compiled server distinguishes the two without a build-time flag.
+ */
+const repoRoot = fs.existsSync(path.join(__dirname, "dist", "workflow", "server.js"))
+  ? __dirname
+  : path.resolve(__dirname, "..");
 const stateDir = resolveStateDir(repoRoot);
 
 app.whenReady().then(async () => {
