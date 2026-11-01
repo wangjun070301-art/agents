@@ -35,8 +35,11 @@ function renderAgents(s){
       const sel=el('select');
       const def=el('option',null,'默认（Codex）');def.value='';sel.append(def);
       for(const a of s.agents){
+        // Only usable agents are selectable. An unavailable one still appears,
+        // so the reason stays visible, but it cannot be chosen.
         const o=el('option',null,a.label+(a.available?'':'（不可用）'));
         o.value=a.id;
+        o.disabled=!a.available;
         sel.append(o);
       }
       sel.value=roleDraft[role]||'';

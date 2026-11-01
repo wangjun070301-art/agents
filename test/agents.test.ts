@@ -45,9 +45,11 @@ test("an unassigned role falls back to codex", () => {
 test("bindings round-trip through the state directory", () => {
   const dir = scratch();
   try {
-    const saved = writeBindings(dir, { developer: "codex", reviewer: "claude" });
-    assert.deepEqual(saved, { developer: "codex", reviewer: "claude" });
-    assert.deepEqual(readBindings(dir), { developer: "codex", reviewer: "claude" });
+    // Only agents that can actually run are bindable. Codex is always present
+    // on the machine this project targets, so the fixture uses it for both.
+    const saved = writeBindings(dir, { developer: "codex", reviewer: "codex" });
+    assert.deepEqual(saved, { developer: "codex", reviewer: "codex" });
+    assert.deepEqual(readBindings(dir), { developer: "codex", reviewer: "codex" });
     // Writing again replaces the file rather than merging stale roles.
     writeBindings(dir, { tester: "codex" });
     assert.deepEqual(readBindings(dir), { tester: "codex" });

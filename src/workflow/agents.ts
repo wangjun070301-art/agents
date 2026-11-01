@@ -119,6 +119,34 @@ function versionOf(binary: string, args = ["--version"]): string | undefined {
 }
 
 /**
+ * Whether Claude Code can actually complete a turn.
+ *
+ * The binary existing is not the same as the agent working. Claude Code 2.1.x
+ * rejects any model name it does not recognise in its built-in list, before it
+ * sends a request: pointing it at a dead base URL still returns the same local
+ * 404. This machine's gateway only offers names like `Deepseek-V4-Pro (3.60x)`,
+ * which are not on that list, so every turn fails locally.
+ *
+ * A proxy that strips the `[1m]` suffix does not help, because the rejection
+ * happens before the request leaves the process. The honest answer is that this
+ * agent cannot run here, and the panel says so.
+ */
+function claudeBlocked(binary: string | undefined): string | undefined {
+  if (!binary) return "没找到 claude 命令";
+  const settings = path.join(os.homedir(), ".claude", "settings.json");
+  try {
+    const raw = JSON.parse(fs.readFileSync(settings, "utf8")) as { env?: Record<string, string> };
+    const model = raw.env?.ANTHROPIC_DEFAULT_SONNET_MODEL ?? "";
+    if (!model) return "没有配置默认模型";
+    // Known Claude names are safe; anything else is rejected locally.
+    if (/^claude-/.test(model)) return undefined;
+    return `配置的模型 ${model} 不在 Claude Code 的内置白名单里，每个回合都会在本地被拒（404），请求根本不会发出`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * DeepSeek Harness is a desktop app that exposes an RPC socket, not a CLI.
  * It is usable only when a host registration exists.
  */
@@ -154,11 +182,9 @@ export function detectAgents(): AgentInfo[] {
       label: LABELS.claude,
       ...(claudeBinary ? { binary: claudeBinary } : {}),
       ...(claudeBinary ? { version: versionOf(claudeBinary) } : {}),
-      available: Boolean(claudeBinary),
-      // Availability here is "the binary runs", not "the gateway accepts it".
-      // The panel surfaces the gateway problem separately because it depends on
-      // the model name the gateway offers, not on the agent.
-      reason: claudeBinary ? "" : "没找到 claude 命令",
+      // Availability means "can complete a turn", not "the binary exists".
+      available: Boolean(claudeBinary) && claudeBlocked(claudeBinary) === undefined,
+      reason: claudeBlocked(claudeBinary) ?? "",
     },
     {
       id: "deepseek-harness",
@@ -203,12 +229,19 @@ export function readBindings(stateDir: string): RoleBindings {
 
 export function writeBindings(stateDir: string, raw: unknown): RoleBindings {
   const candidate = (raw ?? {}) as Record<string, unknown>;
+  // Refuse a binding to an agent that cannot run, rather than accepting it and
+  // failing at task time. The panel only offers usable agents, but the endpoint
+  // is reachable directly.
+  const usable = new Set(detectAgents().filter((a) => a.available).map((a) => a.id as string));
   const out: RoleBindings = {};
   for (const role of ROLES) {
     const value = candidate[role];
     if (value === undefined || value === null || value === "") continue;
     if (typeof value !== "string" || !(Object.keys(LABELS) as string[]).includes(value)) {
       throw new Error(`角色 ${role} 的 agent 不认识：${String(value)}`);
+    }
+    if (!usable.has(value)) {
+      throw new Error(`角色 ${role} 绑定的 ${LABELS[value as AgentId]} 在这台机器上不能执行任务`);
     }
     out[role] = value as AgentId;
   }
