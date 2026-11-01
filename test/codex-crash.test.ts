@@ -303,7 +303,7 @@ test("a crash is refused even when a result file exists", async () => {
  * should produce the same crash classification. SIGTERM is the common one on
  * Unix and also what `taskkill` sends by default on Windows.
  */
-test("SIGTERM is classified as a crash just like SIGKILL", async () => {
+test("SIGTERM and SIGKILL are both classified as retryable crashes", async () => {
   const home = scratchHome();
   const adapter = new CodexAdapter({
     codexPath: process.execPath,
@@ -382,9 +382,15 @@ test("a real SIGTERM produces a crash classification", async () => {
   });
   await assert.rejects(
     () => adapter.execute(envelope),
-    (error: unknown) => error instanceof CodexAdapterError && error.kind === "spawn-failed",
+    (error: unknown) =>
+      error instanceof CodexAdapterError &&
+      error.kind === "spawn-failed" &&
+      // Measured on Windows 11 + Node 26: `child.kill("SIGTERM")` goes through
+      // TerminateProcess but the `close` event still reports the name the
+      // caller asked for, so "SIGTERM" is what the adapter sees there too.
+      // A signal kill is an external event, hence retryable.
+      error.retryable === true &&
+      /terminated by SIGTERM/.test(error.message),
   );
-  // Document what the platform actually reported, without asserting a specific
-  // string: Windows and Unix name the same event differently.
-  assert.equal(typeof reported === "string" || reported === undefined, true);
+  assert.equal(reported, "SIGTERM", "the close event must name the signal the caller sent");
 });

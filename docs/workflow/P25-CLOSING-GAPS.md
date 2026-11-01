@@ -141,6 +141,7 @@ for (let attempt = 0; attempt < 40 && rendered.stageRows !== 13; attempt += 1) {
    崩溃”，不断言名字，因为 `child.kill("SIGTERM")` 在 Windows 上走
    `TerminateProcess`，报告的名字可能不是 `SIGTERM`。要断言就得先知道
    Node 在 Windows 上实际报什么，这需要单独实验。
+   **已补，见 P26**——实测 `close` 事件报的就是调用者传的名字。
 2. **P13 第 2 条：OOM killer。** 触发条件难造，且不是这个项目的职责。
 3. **P21 第 2 条：子进程忽略 SIGKILL。** 卡在不可中断 IO 时中断仍会等。
    这是操作系统语义，不是代码能改的。
