@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>流水线可视化 · 13 阶段与 6 道门禁</title>
+<style>
+:root{
+  --bg:#0B1016;--panel:#121A24;--panel2:#182432;
+  --accent:#4FC3F7;--ok:#4ADE80;--warn:#FBBF24;--bad:#F87171;
+  --ink:#E4EDF5;--muted:#8598AB;--line:#22303F;
+  font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  color:var(--ink);background:var(--bg)
+}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;font-size:14px;line-height:1.65}
+button{font:inherit;cursor:pointer;border:0;background:none;color:inherit}
+
+.top{position:sticky;top:0;z-index:10;display:flex;align-items:center;
+  justify-content:space-between;gap:20px;padding:14px 28px;
+  background:var(--panel);border-bottom:1px solid var(--line)}
+.top h1{font-size:16px;margin:0;font-weight:600}
+.top .sub{font-size:12px;color:var(--muted)}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);flex-wrap:wrap}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:14px;height:4px;border-radius:2px;display:inline-block}
+.sw.fwd{background:var(--accent)}
+.sw.back{background:var(--warn)}
+.sw.blk{background:var(--bad)}
+.sw.gate{background:var(--ok)}
+
+.wrap{padding:26px 28px 80px;max-width:1180px;margin:0 auto}
+.intro{margin:0 0 22px;color:var(--muted);font-size:13px;max-width:760px}
+
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;align-items:start}
+@media(max-width:1000px){.grid{grid-template-columns:minmax(0,1fr)}}
+
+/* ---- 阶段链 ---- */
+.chain{display:flex;flex-direction:column;gap:0}
+.node{position:relative;display:flex;align-items:stretch;gap:14px}
+.node .rail{width:34px;display:flex;flex-direction:column;align-items:center;flex-shrink:0}
+.node .num{width:28px;height:28px;border-radius:50%;background:var(--panel2);
+  border:1px solid var(--line);display:grid;place-items:center;font-size:11px;
+  color:var(--muted);flex-shrink:0}
+.node .stem{width:2px;flex:1;background:var(--line)}
+.node .card{flex:1;margin-bottom:6px;padding:12px 16px;border-radius:10px;
+  background:var(--panel);border:1px solid var(--line);transition:.15s}
+.node .card:hover{border-color:#31536B}
+.node .card.sel{border-color:var(--accent);box-shadow:0 0 0 3px rgba(79,195,247,.12)}
+.node .code{font-size:11px;color:var(--muted);font-family:Consolas,monospace}
+.node .name{font-size:14px;font-weight:600}
+.node .what{font-size:12px;color:var(--muted);margin-top:3px}
+.node .gate-tag{display:inline-block;margin-top:7px;font-size:11px;
+  padding:2px 9px;border-radius:5px;background:rgba(74,222,128,.12);
+  color:var(--ok);border:1px solid rgba(74,222,128,.32);font-weight:600}
+.node .role-tag{display:inline-block;margin-left:6px;font-size:11px;
+  padding:2px 9px;border-radius:5px;background:rgba(79,195,247,.1);
+  color:var(--accent);border:1px solid rgba(79,195,247,.28)}
+.node.last .stem{display:none}
+
+/* ---- 回退边 ---- */
+.back-edges{margin:8px 0 20px 48px;display:flex;flex-direction:column;gap:6px}
+.back{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--warn);
+  padding:7px 12px;border:1px dashed rgba(251,191,36,.35);
+  border-radius:8px;background:rgba(251,191,36,.05);width:fit-content}
+.back .arrow{font-family:Consolas,monospace}
+.back .why{color:var(--muted)}
+
+/* ---- 门禁详情 ---- */
+.side{display:flex;flex-direction:column;gap:14px;position:sticky;top:76px}
+@media(max-width:1000px){.side{position:static}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.card .head{padding:12px 16px;background:var(--panel2);border-bottom:1px solid var(--line);
+  font-size:12px;font-weight:600;letter-spacing:.5px}
+.card .body{padding:14px 16px}
+.gate-item{margin-bottom:14px}
+.gate-item:last-child{margin-bottom:0}
+.gate-item .g{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.gate-item .g b{font-size:13px;color:var(--ok)}
+.gate-item .g .edge{font-size:11px;color:var(--muted);font-family:Consolas,monospace}
+.gate-item ul{margin:6px 0 0;padding-left:18px}
+.gate-item li{font-size:12px;color:var(--muted);line-height:1.7}
+.gate-item li b{color:var(--ink);font-weight:500}
+
+.detail{min-height:150px}
+.detail h3{margin:0 0 6px;font-size:15px}
+.detail .meta{font-size:11px;color:var(--muted);font-family:Consolas,monospace;margin-bottom:10px}
+.detail p{font-size:13px;color:var(--muted);margin:0 0 10px}
+.detail .kv{display:flex;gap:10px;font-size:12px;margin-top:6px}
+.detail .kv span:first-child{color:var(--muted);min-width:70px}
+.detail .empty{color:var(--muted);font-size:13px}
+
+.foot{margin-top:26px;padding-top:16px;border-top:1px solid var(--line);
+  font-size:12px;color:var(--muted);line-height:1.8}
+.foot code{background:#1B2735;padding:1px 5px;border-radius:4px;color:#9FD5F5}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div>
+    <h1>流水线可视化</h1>
+    <div class="sub">13 个阶段 · 6 道门禁 · 3 条回退边 · 1 个阻塞出口</div>
+  </div>
+  <div class="legend">
+    <span><i class="sw fwd"></i>前进</span>
+    <span><i class="sw back"></i>回退</span>
+    <span><i class="sw gate"></i>门禁</span>
+    <span><i class="sw blk"></i>阻塞</span>
+  </div>
+</div>
+
+<div class="wrap">
+  <p class="intro">
+    每个阶段都必须产出下一道门禁要的证据。门禁不过，阶段不前进——点击任一阶段或门禁看它实际检查什么。
+    数据来自 <code>states.ts</code> 和 <code>gates.ts</code>，不是示意图。
+  </p>
+
+  <div class="grid">
+    <div>
+      <div class="chain" id="chain"></div>
+      <div class="back-edges" id="backs"></div>
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <div class="head">选中</div>
+        <div class="body detail" id="detail">
+          <div class="empty">点击左边任一阶段或门禁。</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="head">六道门禁实际查什么</div>
+        <div class="body" id="gateList"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <b>阻塞：</b>任何阶段都可以进入 <code>BLOCKED</code>，且只能回到进入时那个阶段。
+    <br><b>回退：</b><code>REVIEW→IMPLEMENT</code>、<code>VERIFY→IMPLEMENT</code>、<code>INTEGRATE→VERIFY</code> 是仅有的三条反向边。
+    <br><b>终态：</b><code>ARCHIVE</code> 没有出边，到了就停。
+  </div>
+</div>
+
+<script>
+const stages = [
+  {code:'INTAKE', name:'接单', what:'收到任务，还没理解它', gate:null, role:null},
+  {code:'CLARIFY', name:'澄清', what:'把模糊的地方问清楚', gate:null, role:'analyst'},
+  {code:'BASELINE', name:'基线', what:'确认起点：代码、环境、现状', gate:null, role:'analyst'},
+  {code:'SPEC', name:'需求规格', what:'写成可验收的需求与验收项', gate:null, role:'analyst'},
+  {code:'PLAN', name:'计划', what:'拆成任务，排依赖，避免写冲突', gate:'G0', role:'architect'},
+  {code:'DISPATCH', name:'派工', what:'把任务分给具体的 agent', gate:'G1', role:'architect'},
+  {code:'IMPLEMENT', name:'实现', what:'写代码、跑测试、交证据', gate:null, role:'developer'},
+  {code:'REVIEW', name:'审查', what:'独立看 diff，找阻塞问题', gate:'G2', role:'reviewer'},
+  {code:'VERIFY', name:'验证', what:'每条验收项跑自己的命令', gate:'G3', role:'tester'},
+  {code:'INTEGRATE', name:'集成', what:'把改动合到一起并复验', gate:'G4', role:'integrator'},
+  {code:'ACCEPT', name:'验收', what:'人工确认这份交付可用', gate:null, role:null},
+  {code:'DELIVER', name:'交付', what:'产出可安装的成品', gate:'G5', role:null},
+  {code:'ARCHIVE', name:'归档', what:'记录留档，流程结束', gate:null, role:null},
+];
+
+const gates = {
+  G0: {
+    edge:'SPEC → PLAN',
+    summary:'需求本身是否可验收。',
+    checks:[
+      ['requirements-present','必须有需求集'],
+      ['criteria-present','至少一条验收项'],
+      ['criteria-decidable','自动检查要有命令，人工检查要有具名负责人'],
+      ['envelope-cites-known-acs','任务引用的验收编号必须存在'],
+    ],
+  },
+  G1: {
+    edge:'PLAN → DISPATCH',
+    summary:'计划是否覆盖全部工作且不互相踩踏。',
+    checks:[
+      ['tasks-present','必须有任务信封'],
+      ['acs-covered','每条验收项至少被一个任务认领'],
+      ['no-write-collisions','两个任务不能写同一个文件'],
+      ['dependencies-resolve','依赖的任务必须存在'],
+      ['no-dependency-cycle','依赖不能成环'],
+    ],
+  },
+  G2: {
+    edge:'IMPLEMENT → REVIEW',
+    summary:'开发者的自述是否被证据支持。',
+    checks:[
+      ['result-reconciles','结果字段与任务信封对得上'],
+      ['claim-supported','声称成功必须有测试结果撑着'],
+      ['status-succeeded','状态必须是 succeeded'],
+      ['changed-files-honest','声称改的文件要和实际观测一致'],
+      ['claims-match-transcript','声称的测试结果不能与命令输出矛盾'],
+      ['no-unresolved-issues','不能留未解决项'],
+    ],
+  },
+  G3: {
+    edge:'REVIEW → VERIFY',
+    summary:'审查是否真的做过，且没有遗留阻塞项。',
+    checks:[
+      ['review-ran','必须有审查结论（空数组也算看过）'],
+      ['severity-valid','每条发现的严重度必须合法'],
+      ['no-open-blockers','不能有未解决的 Blocker / Major'],
+    ],
+  },
+  G4: {
+    edge:'VERIFY → INTEGRATE',
+    summary:'每条验收项是否真的跑过并全部通过。',
+    checks:[
+      ['verifications-present','必须有验证结果'],
+      ['no-duplicate-verifications','同一验收项不能重复计'],
+      ['every-ac-verified','每条验收项都要有结果'],
+      ['every-ac-passes','每条都必须通过'],
+      ['evidence-cited','通过必须附证据'],
+      ['no-spurious-verifications','不能给不存在的验收项记结果'],
+    ],
+  },
+  G5: {
+    edge:'ACCEPT → DELIVER',
+    summary:'这份交付是否被真人签收。',
+    checks:[
+      ['g4:*','先满足 G4 的全部条件'],
+      ['delivered-artifact','必须有交付物标识（构建哈希或提交）'],
+      ['human-acceptance','必须有具名的人、时间、覆盖的验收项'],
+    ],
+  },
+};
+
+const backs = [
+  {from:'REVIEW', to:'IMPLEMENT', why:'审查发现问题，打回重做'},
+  {from:'VERIFY', to:'IMPLEMENT', why:'验证没通过，打回重做'},
+  {from:'INTEGRATE', to:'VERIFY', why:'集成后复验失败，退回验证'},
+];
+
+const chain = document.getElementById('chain');
+stages.forEach((s, i) => {
+  const node = document.createElement('div');
+  node.className = 'node' + (i === stages.length - 1 ? ' last' : '');
+
+  const rail = document.createElement('div');
+  rail.className = 'rail';
+  const num = document.createElement('div');
+  num.className = 'num';
+  num.textContent = String(i + 1);
+  rail.append(num);
+  if (i !== stages.length - 1) {
+    const stem = document.createElement('div');
+    stem.className = 'stem';
+    rail.append(stem);
+  }
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.dataset.stage = s.code;
+
+  const code = document.createElement('div');
+  code.className = 'code';
+  code.textContent = s.code;
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = s.name;
+  const what = document.createElement('div');
+  what.className = 'what';
+  what.textContent = s.what;
+  card.append(code, name, what);
+
+  if (s.gate) {
+    const tag = document.createElement('div');
+    tag.className = 'gate-tag';
+    tag.textContent = s.gate + ' 把关';
+    card.append(tag);
+  }
+  if (s.role) {
+    // Roles belong to tasks, not to stages. This is the role a task at this
+    // stage usually carries, not something the stage itself is assigned.
+    const r = document.createElement('div');
+    r.className = 'role-tag';
+    r.textContent = '此处的任务通常是 ' + s.role;
+    card.append(r);
+  }
+
+  card.addEventListener('click', () => selectStage(s));
+  node.append(rail, card);
+  chain.append(node);
+});
+
+const backBox = document.getElementById('backs');
+backs.forEach(b => {
+  const row = document.createElement('div');
+  row.className = 'back';
+  row.innerHTML = '<span class="arrow">' + b.from + ' ↺ ' + b.to + '</span>' +
+                  '<span class="why">' + b.why + '</span>';
+  backBox.append(row);
+});
+
+const detail = document.getElementById('detail');
+const gateList = document.getElementById('gateList');
+
+function clearSel() {
+  document.querySelectorAll('.card.sel').forEach(c => c.classList.remove('sel'));
+}
+
+function selectStage(s) {
+  clearSel();
+  document.querySelector('[data-stage="' + s.code + '"]').classList.add('sel');
+
+  let html = '<h3>' + s.name + '</h3>';
+  html += '<div class="meta">' + s.code + '</div>';
+  html += '<p>' + s.what + '。</p>';
+  if (s.role) {
+    html += '<div class="kv"><span>默认角色</span><span>' + s.role + '</span></div>';
+  }
+  if (s.gate) {
+    const g = gates[s.gate];
+    html += '<div class="kv"><span>入口门禁</span><span>' + s.gate + '（' + g.edge + '）</span></div>';
+    html += '<div class="kv"><span>门禁要求</span><span>' + g.summary + '</span></div>';
+  } else {
+    html += '<div class="kv"><span>入口门禁</span><span>无，可直接进入</span></div>';
+  }
+  const back = backs.filter(b => b.from === s.code);
+  if (back.length) {
+    html += '<div class="kv"><span>可回退到</span><span>' + back.map(b => b.to).join('、') + '</span></div>';
+  }
+  detail.innerHTML = html;
+}
+
+function selectGate(code) {
+  clearSel();
+  const g = gates[code];
+  let html = '<h3>' + code + '</h3>';
+  html += '<div class="meta">' + g.edge + '</div>';
+  html += '<p>' + g.summary + '</p>';
+  html += '<ul>';
+  for (const [id, text] of g.checks) {
+    html += '<li><b>' + id + '</b> — ' + text + '</li>';
+  }
+  html += '</ul>';
+  detail.innerHTML = html;
+}
+
+let gateHtml = '';
+for (const code of Object.keys(gates)) {
+  const g = gates[code];
+  gateHtml += '<div class="gate-item">';
+  gateHtml += '<div class="g"><b>' + code + '</b><span class="edge">' + g.edge + '</span></div>';
+  gateHtml += '<ul>';
+  for (const [id, text] of g.checks) {
+    gateHtml += '<li><b>' + id + '</b> — ' + text + '</li>';
+  }
+  gateHtml += '</ul></div>';
+}
+gateList.innerHTML = gateHtml;
+</script>
+</body>
+</html>

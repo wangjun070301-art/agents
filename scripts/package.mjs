@@ -75,7 +75,9 @@ const DIRECTORY_RULES = new Map([
   // record of why each stage exists and what it does not prove.
   // The rule is tested against the last path segment, so the workflow series
   // matches by filename and lands under docs/workflow/ in the archive.
-  ["docs", /^(?:video-explanation|FAILURE_REVIEW|USER_ACCEPTANCE|CODEX_WORKFLOW|QUEUE_WORKER|DEEPSEEK|AGENT_HUB_DESIGN|AGENT_HUB|RELEASE_NOTES|USAGE)\.md$|^(?:P\d+[A-Z0-9-]*|HUD-REDESIGN|BASELINE|REVIEW-[A-Z0-9-]+|ACCEPTANCE-[A-Z0-9-]+|CLAUDE-REVIEWER|PROXY)\.md$/],
+  // The top-level docs, the workflow series, and the pipeline diagram the
+  // panel links to.
+  ["docs", /^(?:video-explanation|FAILURE_REVIEW|USER_ACCEPTANCE|CODEX_WORKFLOW|QUEUE_WORKER|DEEPSEEK|AGENT_HUB_DESIGN|AGENT_HUB|RELEASE_NOTES|USAGE)\.md$|^(?:P\d+[A-Z0-9-]*|HUD-REDESIGN|BASELINE|REVIEW-[A-Z0-9-]+|ACCEPTANCE-[A-Z0-9-]+|CLAUDE-REVIEWER|PROXY)\.md$|^workflow-pipeline\.html$/],
   ["scripts", /^(?:package|install-skill|install-deepseek-skill|install-deepseek-plugin|deepseek-call|workbuddy-call|agent-hub-call)\.mjs$/],
   // Both the POSIX shell launchers and their Windows .cmd counterparts ship,
   // plus the shared .env loader the .cmd files call.

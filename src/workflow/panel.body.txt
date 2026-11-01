@@ -119,6 +119,9 @@
       <div class="stage-map" id="stageMap"></div>
       <p class="label" style="margin-top:14px">质量门禁</p>
       <div class="gates" id="gates"></div>
+      <p class="hintline" style="margin-top:10px">
+        想知道每道门禁具体查什么？<a href="/pipeline.html" target="_blank" rel="noopener">看流水线图</a>
+      </p>
       <p class="label" style="margin-top:16px">可推进到</p>
       <div class="actions" id="nextStages"></div>
       <div id="releaseBox" hidden>

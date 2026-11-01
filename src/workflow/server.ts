@@ -142,6 +142,26 @@ export function createPanel(options: ServerOptions): {
       send(res, 200, JSON.stringify(snapshot()));
       return;
     }
+    /**
+     * The pipeline diagram, served from the docs folder.
+     *
+     * It is a static file rather than a route in this server: the diagram is
+     * documentation, and keeping it next to the workflow notes means one copy
+     * to update when a gate changes.
+     */
+    if (req.method === "GET" && url.pathname === "/pipeline.html") {
+      const candidates = [
+        path.join(stateDir, "..", "docs", "workflow-pipeline.html"),
+        path.join(process.cwd(), "docs", "workflow-pipeline.html"),
+      ];
+      const found = candidates.find((candidate) => fs.existsSync(candidate));
+      if (found) {
+        send(res, 200, fs.readFileSync(found, "utf8"), "text/html");
+      } else {
+        send(res, 404, "流水线图文件缺失（docs/workflow-pipeline.html）", "text/plain");
+      }
+      return;
+    }
     if (req.method === "POST" && url.pathname === "/api/release") {
       readJson(req)
         .then((body) => {
@@ -934,6 +954,9 @@ input::placeholder,textarea::placeholder{color:#4E6076}
       <div class="stage-map" id="stageMap"></div>
       <p class="label" style="margin-top:14px">质量门禁</p>
       <div class="gates" id="gates"></div>
+      <p class="hintline" style="margin-top:10px">
+        想知道每道门禁具体查什么？<a href="/pipeline.html" target="_blank" rel="noopener">看流水线图</a>
+      </p>
       <p class="label" style="margin-top:16px">可推进到</p>
       <div class="actions" id="nextStages"></div>
       <div id="releaseBox" hidden>
