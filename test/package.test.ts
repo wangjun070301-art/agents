@@ -35,6 +35,14 @@ async function fixture() {
     "bin/workbuddy-service": "#!/bin/sh\nexit 0\n",
     "bin/workbuddy-gateway.cmd": "@echo off\r\nexit /b 0\r\n",
     "bin/_load-env.cmd": "@echo off\r\nexit /b 0\r\n",
+    "app/main.cjs": "// Electron shell entry\n",
+    "app/panel-host.cjs": "// panel seams\n",
+    "tools/panel.mjs": "// browser entry point\n",
+    "dist/workflow/server.js": "export {};\n",
+    "src/workflow/server.ts": "export {};\n",
+    "docs/workflow/USAGE.md": "# Usage\n",
+    "docs/workflow/P1-SKELETON.md": "# P1\n",
+    "docs/workflow/P26-SIGNAL-NAMES.md": "# P26\n",
     "docs/QUEUE_WORKER.md": "# Queue\n",
     "docs/USER_ACCEPTANCE.md": "# Pending\n",
     "docs/CODEX_WORKFLOW.md": "# Supervision\n",
@@ -100,6 +108,16 @@ test("release archive uses a file allowlist and hashes every included file", asy
     // otherwise has no entry point at all.
     assert.ok(selected.includes("bin/workbuddy-gateway.cmd"), "the .cmd launcher must ship");
     assert.ok(selected.includes("bin/_load-env.cmd"), "the shared .env loader must ship");
+    // Without app/ the delivered software has no desktop entry point.
+    assert.ok(selected.includes("app/main.cjs"), "the Electron shell must ship");
+    assert.ok(selected.includes("app/panel-host.cjs"), "the shell's testable seams must ship");
+    // The workflow series is the written record of each stage; it ships with it.
+    assert.ok(selected.includes("docs/workflow/P1-SKELETON.md"), "workflow notes must ship");
+    assert.ok(selected.includes("docs/workflow/P26-SIGNAL-NAMES.md"), "the latest workflow note must ship");
+    // The browser entry point is the only way to run the panel without Electron.
+    assert.ok(selected.includes("tools/panel.mjs"), "the browser entry point must ship");
+    assert.ok(selected.includes("dist/workflow/server.js"), "the compiled panel server must ship");
+    assert.ok(selected.includes("docs/workflow/USAGE.md"), "the usage guide must ship");
     assert.ok(selected.includes("dist/desktop-worker-cli.js"));
     for (const filename of ["bin/workbuddy-service", "dist/persistent-service.js", "dist/service-cli.js", "dist/native-desktop-trigger.js"]) assert.ok(selected.includes(filename));
     assert.ok(selected.includes("docs/QUEUE_WORKER.md"));

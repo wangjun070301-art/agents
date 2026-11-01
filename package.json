@@ -1,6 +1,6 @@
 {
   "name": "codex-workbuddy-gateway",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "Local Agent Hub with HTTP, MCP, SDK, CLI and a workbench; WorkBuddy executor and existing Harness bridge.",
   "type": "module",

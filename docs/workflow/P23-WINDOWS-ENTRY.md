@@ -47,8 +47,8 @@ server.listen(port, host, () => {
 import(path.join(repoRoot, "dist", "workflow", "server.js"))
 ```
 
-在 POSIX 上 `path.join` 给的是 `/Users/.../server.js`，Node 容忍这种
-无协议字符串。在 Windows 上给的是 `C:\...\server.js`，Node 把它读成
+在 POSIX 上 `path.join` 给的是 `/home/<user>/.../server.js`，Node 容忍
+这种无协议字符串。在 Windows 上给的是 `C:\...\server.js`，Node 把它读成
 协议 `c:`：
 
 ```
