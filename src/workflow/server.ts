@@ -543,366 +543,284 @@ const PANEL_HTML = String.raw`<!doctype html>
 <title>流水线控制台</title>
 <style>
 :root{
-  --bg:#050B14;--bg2:#0A0F1D;--panel:rgba(13,22,38,.72);--panel2:rgba(16,28,48,.85);
-  --cyan:#00F2FE;--green:#10B981;--red:#FF4D4D;--orange:#FF9F43;
-  --ink:#D8F3FF;--muted:#7B8FA8;--line:rgba(0,242,254,.18);--line2:rgba(0,242,254,.35);
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--ink);background:var(--bg)
+  --bg:#0B1016;--panel:#121A24;--panel2:#182432;
+  --accent:#4FC3F7;--ok:#4ADE80;--warn:#FBBF24;--bad:#F87171;
+  --ink:#E4EDF5;--muted:#8598AB;--line:#22303F;
+  font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  color:var(--ink);background:var(--bg)
 }
-*{box-sizing:border-box}body{margin:0;min-height:100vh;background:
-  radial-gradient(1000px 500px at 15% -10%,rgba(0,242,254,.10),transparent 60%),
-  radial-gradient(700px 400px at 90% 0%,rgba(16,185,129,.07),transparent 55%),
-  var(--bg);
-  background-image:
-    linear-gradient(rgba(0,242,254,.03) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(0,242,254,.03) 1px,transparent 1px);
-  background-size:44px 44px}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:var(--bg);font-size:14px;line-height:1.7}
 button,input,textarea,select{font:inherit}
 button{cursor:pointer;border:0}
-button:disabled{opacity:.35;cursor:default}
-a{color:var(--cyan)}
-::-webkit-scrollbar{width:8px;height:8px}
-::-webkit-scrollbar-thumb{background:rgba(0,242,254,.25);border-radius:4px}
-::-webkit-scrollbar-track{background:transparent}
-::selection{background:rgba(0,242,254,.3)}
-.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 28px;border-bottom:1px solid var(--line);background:rgba(5,11,20,.8);backdrop-filter:blur(12px);position:sticky;top:0;z-index:20}
-.brand{display:flex;align-items:center;gap:14px}
-.brand .logo{width:36px;height:36px;border-radius:8px;background:linear-gradient(135deg,rgba(0,242,254,.2),rgba(0,242,254,.05));border:1px solid var(--line2);display:grid;place-items:center;font-weight:800;font-size:18px;color:var(--cyan);box-shadow:0 0 20px rgba(0,242,254,.25),inset 0 0 12px rgba(0,242,254,.15)}
-.brand h1{font-size:15px;margin:0;font-weight:700;letter-spacing:.5px;color:var(--ink)}
-.brand .tag{font-size:9px;color:var(--cyan);letter-spacing:2.5px;opacity:.8}
-.top-actions{display:flex;gap:8px;align-items:center}
-.status-pill{display:inline-flex;align-items:center;gap:7px;font-size:11px;padding:6px 14px;border-radius:999px;background:rgba(0,242,254,.08);border:1px solid var(--line2);letter-spacing:.5px}
-.status-pill .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green)}
-.status-pill.warn .dot{background:var(--orange);box-shadow:0 0 10px var(--orange);animation:pulse 1.2s ease-in-out infinite}
-.status-pill.bad .dot{background:var(--red);box-shadow:0 0 10px var(--red)}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-.wrap{padding:24px 28px 40px;max-width:1500px;margin:0 auto}
-.grid{display:grid;grid-template-columns:280px minmax(0,1fr) 320px;gap:16px;align-items:start}
-.col{display:flex;flex-direction:column;gap:16px;min-width:0}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;backdrop-filter:blur(8px);box-shadow:0 0 20px rgba(0,242,254,.04)}
-.head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);background:rgba(0,242,254,.04)}
-.head h2{font-size:12px;margin:0;font-weight:650;letter-spacing:1.5px;color:var(--cyan);text-transform:uppercase}
-.head .hint{font-size:11px;color:var(--muted)}
-.body{padding:16px}
-.badge{display:inline-block;font-size:10px;padding:3px 10px;border-radius:999px;background:rgba(16,185,129,.12);color:var(--green);border:1px solid rgba(16,185,129,.3);font-weight:600;letter-spacing:.5px}
-.badge.warn{background:rgba(255,159,67,.12);color:var(--orange);border-color:rgba(255,159,67,.35)}
-.badge.bad{background:rgba(255,77,77,.12);color:var(--red);border-color:rgba(255,77,77,.35)}
-.badge.idle{background:rgba(123,143,168,.1);color:var(--muted);border-color:var(--line)}
-.label{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan);opacity:.7;margin:0 0 8px;font-weight:600}
-input,textarea,select{width:100%;border:1px solid rgba(0,242,254,.2);border-radius:8px;padding:9px 12px;color:var(--ink);background:rgba(5,11,20,.6);outline:none;font-size:13px}
-input:focus,textarea:focus,select:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(0,242,254,.12),0 0 15px rgba(0,242,254,.15)}
-textarea{resize:vertical;line-height:1.6}
-input::placeholder,textarea::placeholder{color:#4A5B70}
-.btn{border-radius:8px;padding:9px 16px;font-size:12px;font-weight:700;letter-spacing:.5px;background:linear-gradient(135deg,rgba(0,242,254,.25),rgba(0,242,254,.1));color:var(--cyan);border:1px solid var(--line2);transition:all .15s}
-.btn:hover{box-shadow:0 0 18px rgba(0,242,254,.3)}
+button:disabled{opacity:.4;cursor:default}
+code{background:#1B2735;padding:1px 5px;border-radius:4px;font-size:12px;color:#9FD5F5}
+
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:14px 28px;border-bottom:1px solid var(--line);background:var(--panel);
+  position:sticky;top:0;z-index:10}
+.brand{display:flex;align-items:center;gap:12px}
+.brand .logo{width:34px;height:34px;border-radius:8px;background:#1B2735;
+  border:1px solid var(--line);display:grid;place-items:center;
+  font-weight:700;font-size:15px;color:var(--accent)}
+.brand h1{font-size:16px;margin:0;font-weight:600}
+.brand .tag{font-size:11px;color:var(--muted);margin-top:1px}
+.top-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.status-pill{display:inline-flex;align-items:center;gap:7px;font-size:12px;
+  padding:5px 12px;border-radius:999px;background:var(--panel2);border:1px solid var(--line)}
+.status-pill .dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+
+.wrap{padding:22px 28px 60px;max-width:980px;margin:0 auto}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  margin-bottom:16px;overflow:hidden}
+.step{box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.head{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel2)}
+.step-title{display:flex;align-items:center;gap:12px}
+.step-no{width:26px;height:26px;border-radius:50%;background:var(--accent);
+  color:#0B1016;font-weight:700;font-size:13px;display:grid;place-items:center;flex-shrink:0}
+.step-title h2{font-size:15px;margin:0;font-weight:600}
+.head .hint{font-size:12px;color:var(--muted)}
+.body{padding:18px 20px}
+.lead{margin:0 0 16px;color:var(--muted);font-size:13px}
+.sub-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+
+.label{font-size:12px;color:var(--muted);margin:14px 0 6px;font-weight:500}
+.hintline{font-size:12px;color:var(--muted);margin:5px 0 0;opacity:.85}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+
+input,textarea,select{width:100%;border:1px solid var(--line);border-radius:8px;
+  padding:9px 12px;color:var(--ink);background:#0E1620;outline:none;font-size:13px}
+input:focus,textarea:focus,select:focus{border-color:var(--accent);
+  box-shadow:0 0 0 3px rgba(79,195,247,.12)}
+textarea{resize:vertical;line-height:1.6;min-height:64px}
+input::placeholder,textarea::placeholder{color:#4E6076}
+
+.btn{border-radius:8px;padding:9px 18px;font-size:13px;font-weight:600;
+  background:var(--accent);color:#0B1016}
+.btn:hover{filter:brightness(1.1)}
 .btn.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
-.btn.ghost:hover{color:var(--ink);border-color:var(--line2)}
-.btn.danger{background:linear-gradient(135deg,rgba(255,77,77,.25),rgba(255,77,77,.1));color:var(--red);border-color:rgba(255,77,77,.4)}
-.btn.danger:hover{box-shadow:0 0 18px rgba(255,77,77,.3)}
-.btn.sm{padding:5px 10px;font-size:11px}
-.actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
-.msg{font-size:12px;margin-top:10px;line-height:1.6;color:var(--green)}
-.msg.err{color:var(--red)}
-.empty{padding:32px 16px;text-align:center;color:var(--muted);font-size:12px;line-height:1.8}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.btn.ghost:hover{color:var(--ink);border-color:#2F4356}
+.btn.danger{background:transparent;color:var(--bad);border:1px solid #5A2A2A}
+.btn.sm{padding:5px 12px;font-size:12px}
+.actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.msg{font-size:13px;margin-top:12px;color:var(--ok)}
+.msg.err{color:var(--bad)}
+.empty{padding:26px 12px;text-align:center;color:var(--muted);font-size:13px}
+.mono{font-family:Consolas,monospace;font-size:12px}
 
-/* stage map */
-.stage-map{display:flex;flex-direction:column;padding:4px 2px}
-.stage-row{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:6px;position:relative;border:1px solid transparent}
+.badge{display:inline-block;font-size:11px;padding:3px 10px;border-radius:999px;
+  background:rgba(74,222,128,.12);color:var(--ok);border:1px solid rgba(74,222,128,.3);font-weight:600}
+.badge.warn{background:rgba(251,191,36,.12);color:var(--warn);border-color:rgba(251,191,36,.35)}
+.badge.bad{background:rgba(248,113,113,.12);color:var(--bad);border-color:rgba(248,113,113,.35)}
+.badge.idle{background:var(--panel2);color:var(--muted);border-color:var(--line)}
+
+/* 需求 / 任务卡片 */
+.req{border:1px solid var(--line);border-radius:10px;padding:14px;
+  margin-bottom:12px;background:#0E1620}
+.item-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
+.item-head b{color:var(--accent);font-size:13px}
+.ac-list{margin-top:10px;padding-left:14px;border-left:2px solid var(--line)}
+.ac{border:1px solid var(--line);border-radius:8px;padding:11px;
+  margin-bottom:10px;background:#121A24}
+.req input,.req textarea{font-size:13px;padding:8px 10px}
+.req .label{margin:9px 0 4px;font-size:11px}
+
+/* 阶段地图 */
+.stage-map{display:flex;flex-direction:column}
+.stage-row{display:flex;align-items:center;gap:10px;padding:5px 8px;
+  border-radius:6px;border:1px solid transparent;font-size:13px}
 .stage-row.done{color:var(--muted)}
-.stage-row.current{background:rgba(0,242,254,.08);border-color:var(--line2);box-shadow:0 0 15px rgba(0,242,254,.15)}
-.stage-row.blocked{background:rgba(255,159,67,.08);border-color:rgba(255,159,67,.4)}
-.stage-idx{width:20px;height:20px;border-radius:50%;background:rgba(5,11,20,.7);border:1px solid var(--line2);display:grid;place-items:center;font-size:9px;color:var(--muted);flex-shrink:0}
-.stage-row.done .stage-idx{background:rgba(16,185,129,.15);border-color:var(--green);color:var(--green)}
-.stage-row.current .stage-idx{background:var(--cyan);border-color:var(--cyan);color:#050B14;font-weight:800;box-shadow:0 0 12px var(--cyan)}
-.stage-row.blocked .stage-idx{background:var(--orange);border-color:var(--orange);color:#050B14}
-.stage-name{font-size:12px;flex:1;letter-spacing:.3px}
-.stage-row.current .stage-name{font-weight:700;color:var(--cyan)}
-.stage-state{font-size:9px;color:var(--muted)}
-.stage-row.current .stage-state{color:var(--cyan)}
-.stage-row.blocked .stage-state{color:var(--orange)}
-.stage-connector{width:2px;height:5px;margin-left:17px;background:var(--line2)}
-.stage-row.done .stage-connector{background:var(--green)}
+.stage-row.current{background:rgba(79,195,247,.08);border-color:#2E5A76;color:var(--accent);font-weight:600}
+.stage-row.blocked{background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.4);color:var(--warn)}
+.stage-idx{width:22px;height:22px;border-radius:50%;background:#0E1620;
+  border:1px solid var(--line);display:grid;place-items:center;font-size:10px;color:var(--muted);flex-shrink:0}
+.stage-row.done .stage-idx{background:rgba(74,222,128,.12);border-color:rgba(74,222,128,.4);color:var(--ok)}
+.stage-row.current .stage-idx{background:var(--accent);border-color:var(--accent);color:#0B1016;font-weight:700}
+.stage-row.blocked .stage-idx{background:var(--warn);border-color:var(--warn);color:#0B1016}
+.stage-name{flex:1}
+.stage-state{font-size:10px;color:var(--muted)}
+.stage-connector{width:2px;height:4px;margin-left:18px;background:var(--line)}
 
-/* gates */
+/* 门禁 */
 .gates{display:flex;gap:6px;flex-wrap:wrap}
-.gate{font-size:10px;padding:4px 9px;border-radius:5px;background:rgba(5,11,20,.6);border:1px solid var(--line);color:var(--muted);font-weight:700}
-.gate.on{background:rgba(16,185,129,.15);border-color:var(--green);color:var(--green);box-shadow:0 0 10px rgba(16,185,129,.2)}
+.gate{font-size:11px;padding:4px 10px;border-radius:5px;background:#0E1620;
+  border:1px solid var(--line);color:var(--muted);font-weight:600}
+.gate.on{background:rgba(74,222,128,.12);border-color:rgba(74,222,128,.4);color:var(--ok)}
 
-/* history timeline */
-.timeline{position:relative;padding-left:20px}
-.timeline::before{content:'';position:absolute;left:5px;top:4px;bottom:4px;width:2px;background:linear-gradient(var(--cyan),rgba(0,242,254,.05))}
-.tl-item{position:relative;padding:9px 0 9px 2px}
-.tl-item::before{content:'';position:absolute;left:-17px;top:15px;width:9px;height:9px;border-radius:50%;background:var(--bg2);border:2px solid var(--line2)}
-.tl-item.done::before{background:rgba(16,185,129,.2);border-color:var(--green);box-shadow:0 0 8px var(--green)}
-.tl-item.blocked::before{background:var(--orange);border-color:var(--orange);box-shadow:0 0 8px var(--orange)}
-.tl-item.failed::before{background:var(--red);border-color:var(--red);box-shadow:0 0 8px var(--red)}
-.tl-title{font-size:12px;font-weight:600;color:var(--ink)}
-.tl-meta{font-size:10px;color:var(--muted);margin-top:2px}
-.tl-note{font-size:11px;color:#9FB6CC;margin-top:4px;line-height:1.5}
-.tl-gate{display:inline-block;font-size:9px;padding:2px 7px;border-radius:4px;background:rgba(0,242,254,.1);color:var(--cyan);margin-left:6px;font-weight:700}
-.tl-gate.fail{background:rgba(255,77,77,.12);color:var(--red)}
+/* 历史 */
+.timeline{position:relative;padding-left:18px}
+.timeline::before{content:'';position:absolute;left:5px;top:6px;bottom:6px;
+  width:2px;background:var(--line)}
+.item{padding:9px 0 9px 2px;position:relative}
+.item::before{content:'';position:absolute;left:-15px;top:15px;width:8px;height:8px;
+  border-radius:50%;background:var(--panel);border:2px solid var(--line)}
+.item b{font-size:13px}
+.item .mono{color:var(--muted);margin-top:2px}
 
-/* output */
-.output-box{background:rgba(3,8,16,.9);border:1px solid rgba(0,242,254,.15);border-radius:8px;padding:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#B8E6F5;box-shadow:inset 0 0 20px rgba(0,242,254,.05)}
-.output-box .out-stderr{color:var(--orange)}
+/* 输出 */
+.output-box{background:#080D13;border:1px solid var(--line);border-radius:8px;
+  padding:12px;font-family:Consolas,monospace;font-size:12px;line-height:1.6;
+  max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#A9C4D8}
 
-/* task list */
-.task-card{border:1px solid rgba(0,242,254,.15);border-radius:10px;padding:13px;margin-bottom:10px;background:rgba(5,11,20,.5)}
-.task-card:hover{border-color:var(--line2)}
-.task-card .t-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
-.task-card .t-id{font-size:11px;color:var(--cyan);font-weight:700}
-.task-card .t-role{font-size:9px;color:var(--muted);border:1px solid var(--line2);padding:1px 7px;border-radius:4px;letter-spacing:.5px}
-.task-card .t-obj{font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px}
+/* 折叠区 */
+.fold{background:var(--panel)}
+.fold summary{display:flex;align-items:center;justify-content:space-between;
+  gap:12px;padding:13px 20px;cursor:pointer;list-style:none;
+  background:var(--panel2);font-weight:500}
+.fold summary::-webkit-details-marker{display:none}
+.fold summary::before{content:'▸';color:var(--muted);margin-right:8px;transition:transform .15s}
+.fold[open] summary::before{transform:rotate(90deg)}
+.fold-title{flex:1;font-size:14px}
 
-/* config forms */
-.req{border:1px solid rgba(0,242,254,.12);border-radius:10px;padding:12px;margin-bottom:10px;background:rgba(5,11,20,.45)}
-.item-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
-.item-head b{color:var(--cyan);font-size:12px}
-.ac-list{margin-top:10px;padding-left:12px;border-left:2px solid var(--line2)}
-.ac{border:1px solid rgba(0,242,254,.1);border-radius:8px;padding:9px;margin-bottom:8px;background:rgba(10,15,29,.5)}
-.req input,.req textarea{font-size:12px;padding:7px 10px}
-.req .label{margin:7px 0 3px;font-size:9px}
-
-@media(max-width:1200px){.grid{grid-template-columns:240px minmax(0,1fr)}.col:last-child{grid-column:1/-1}}
-@media(max-width:800px){.grid{grid-template-columns:minmax(0,1fr)}.topbar{padding:12px 16px}.wrap{padding:16px}.brand .tag{display:none}}
+@media(max-width:820px){
+  .wrap{padding:16px}
+  .grid2{grid-template-columns:1fr}
+  .brand .tag{display:none}
+}
 </style></head><body>
 <div class="topbar">
-  <div class="brand"><div class="logo">AO</div><div><h1>AGENT ORCHESTRATOR</h1><div class="tag">CYBER-HUD · MULTI-AGENT DIRECT CONTROL</div></div></div>
+  <div class="brand"><div class="logo">AO</div><div><h1>流水线控制台</h1><div class="tag">四步走完一个任务</div></div></div>
   <div class="top-actions">
-    <span class="status-pill"><span class="dot"></span>ONLINE 127.0.0.1:18493</span>
-    <span class="status-pill" id="runState">IDLE</span>
-    <button class="btn ghost sm" id="exportJson">导出</button>
-    <button class="btn ghost sm" id="importJson">导入</button>
+    <span class="status-pill"><span class="dot"></span>已连接</span>
+    <span class="status-pill" id="runState">空闲</span>
+    <button class="btn ghost sm" id="exportJson">导出配置</button>
+    <button class="btn ghost sm" id="importJson">导入配置</button>
     <input id="importFile" type="file" accept="application/json,.json" hidden>
   </div>
 </div>
+
 <div class="wrap">
-  <div class="grid">
-    <!-- 左：Agent 矩阵监视舱 -->
-    <div class="col">
-      <section class="card">
-        <div class="head"><h2>Agent Matrix</h2><span class="badge" id="state">读取中</span></div>
-        <div class="body">
-          <div class="stage-map" id="stageMap"></div>
-          <p class="label" style="margin-top:14px">质量门禁</p>
-          <div class="gates" id="gates"></div>
-        </div>
-      </section>
-      <section class="card">
-        <div class="head"><h2>Intervention</h2><span class="badge">DIRECT</span></div>
-        <div class="body">
-          <p class="label">可推进到</p>
-          <div class="actions" id="nextStages"></div>
-          <div id="releaseBox" hidden>
-            <p class="label" style="margin-top:14px">放行回哪个阶段</p>
-            <input id="releaseTo" placeholder="例如 IMPLEMENT">
-            <textarea id="releaseNote" placeholder="为什么可以继续（会记入历史）"></textarea>
-            <div class="actions"><button class="btn" id="releaseBtn">放行</button><button class="btn danger" id="blockBtn">强制阻塞</button></div>
-          </div>
-          <div class="msg" id="actionMsg"></div>
-        </div>
-      </section>
-    </div>
 
-    <!-- 中：直接控制中心 -->
-    <div class="col">
-      <section class="card">
-        <div class="head"><h2>Direct Control</h2><span class="hint" id="stageHint"></span></div>
-        <div class="body">
-          <p class="label">项目配置</p>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-            <div><p class="label">名称</p><input id="pName" placeholder="例如 fixture"></div>
-            <div><p class="label">沙箱</p><input id="pSandbox" value="bypass"></div>
-          </div>
-          <p class="label" style="margin-top:12px">代码目录</p><input id="pRepo" placeholder="C:\\path\\to\\repo">
-          <p class="label" style="margin-top:12px">模型</p><input id="pModel" value="deepseek-v4.1-flash-solo">
-          <p class="label" style="margin-top:14px">需求</p>
-          <div id="reqList"></div>
-          <div class="actions"><button class="btn ghost sm" id="addReq">+ 需求</button></div>
-          <p class="label" style="margin-top:14px">任务</p>
-          <div id="taskForm"></div>
-          <div class="actions"><button class="btn ghost sm" id="addTask">+ 任务</button><button class="btn" id="saveProject">保存配置</button></div>
-          <div class="msg" id="projMsg"></div>
-        </div>
-      </section>
-      <section class="card">
-        <div class="head"><h2>Task Queue</h2><span class="badge idle" id="projState">未配置</span></div>
-        <div class="body" id="taskList"><div class="empty">先保存项目配置。</div></div>
-        <div class="body" style="padding-top:0"><button class="btn" id="runPlanBtn" style="width:100%">▶ 执行整个工作流</button></div>
-      </section>
-      <section class="card" id="outputCard" hidden>
-        <div class="head"><h2>Live Terminal</h2><div class="actions" style="margin:0"><button class="btn danger sm" id="cancelBtn">中断</button></div></div>
-        <div class="body"><div class="output-box" id="output"></div></div>
-      </section>
+  <!-- 第 1 步 -->
+  <section class="card step">
+    <div class="head">
+      <div class="step-title"><span class="step-no">1</span><h2>选一个项目</h2></div>
+      <span class="badge idle" id="projState">未配置</span>
     </div>
+    <div class="body">
+      <p class="lead">先告诉它要在哪个代码目录里干活。</p>
 
-    <!-- 右：交互终端 + 历史 -->
-    <div class="col">
-      <section class="card">
-        <div class="head"><h2>History</h2><span class="badge" id="count">0</span></div>
-        <div class="body" style="padding:12px">
-          <input id="historyFilter" placeholder="筛选：阶段 / 门禁 / 备注">
-          <div class="timeline" id="history" style="margin-top:8px"><div class="empty">还没有阶段变化。</div></div>
+      <div class="grid2">
+        <div>
+          <p class="label">项目名称</p>
+          <input id="pName" placeholder="随便起，例如 myproj">
+          <p class="hintline">只用来显示，不影响执行。</p>
         </div>
-      </section>
-      <section class="card">
-        <div class="head"><h2>Run Records</h2><span class="badge" id="taskCount">0</span></div>
-        <div class="body" id="tasks"><div class="empty">还没有任务记录。</div></div>
+        <div>
+          <p class="label">沙箱</p>
+          <input id="pSandbox" value="bypass">
+          <p class="hintline">这台机器必须填 bypass，否则子进程无法执行命令。</p>
+        </div>
+      </div>
+
+      <p class="label">代码目录（绝对路径，必须已存在）</p>
+      <input id="pRepo" placeholder="C:\work\myproj">
+      <p class="hintline">例：<code>C:\work\myproj</code>。填错会直接报「目录不存在」。</p>
+
+      <p class="label">模型</p>
+      <input id="pModel" value="deepseek-v4.1-flash-solo">
+      <p class="hintline">用你代理里实际可用的模型 ID，不确定就保持默认。</p>
+
+      <div class="actions"><button class="btn" id="saveProject">保存项目</button></div>
+      <div class="msg" id="projMsg"></div>
+    </div>
+  </section>
+
+  <!-- 第 2 步 -->
+  <section class="card step">
+    <div class="head">
+      <div class="step-title"><span class="step-no">2</span><h2>说清要做什么</h2></div>
+      <span class="hint">需求 + 怎么算通过</span>
+    </div>
+    <div class="body">
+      <p class="lead">一条需求配一个验收项：一条说「要什么」，一条说「怎么算做到」。</p>
+      <div id="reqList"></div>
+      <div class="actions"><button class="btn ghost" id="addReq">+ 加一条需求</button></div>
+    </div>
+  </section>
+
+  <!-- 第 3 步 -->
+  <section class="card step">
+    <div class="head">
+      <div class="step-title"><span class="step-no">3</span><h2>拆成几个任务</h2></div>
+      <span class="hint">每个任务交给一个子进程做</span>
+    </div>
+    <div class="body">
+      <p class="lead">任务按依赖顺序执行。有依赖的填「依赖任务」，没有就留空。</p>
+      <div id="taskForm"></div>
+      <div class="actions"><button class="btn ghost" id="addTask">+ 加一个任务</button></div>
+    </div>
+  </section>
+
+  <!-- 第 4 步 -->
+  <section class="card step">
+    <div class="head">
+      <div class="step-title"><span class="step-no">4</span><h2>跑起来</h2></div>
+      <span class="hint">跑完会自动推进阶段</span>
+    </div>
+    <div class="body">
+      <p class="lead">保存过项目之后，这里会列出任务。点「开始执行」按依赖顺序跑完整份计划。</p>
+      <div id="taskList"><div class="empty">先在第 1 步保存项目。</div></div>
+      <div class="actions"><button class="btn" id="runPlanBtn" style="width:100%">▶ 开始执行</button></div>
+
+      <section id="outputCard" hidden style="margin-top:14px">
+        <div class="sub-head">
+          <span class="label" style="margin:0">实时输出</span>
+          <button class="btn danger sm" id="cancelBtn">中断</button>
+        </div>
+        <div class="output-box" id="output"></div>
       </section>
     </div>
-  </div>
+  </section>
+
+  <!-- 折叠区 -->
+  <details class="card fold">
+    <summary><span class="fold-title">流水线进度</span><span class="badge" id="state">读取中</span></summary>
+    <div class="body">
+      <p class="hintline" id="stageHint"></p>
+      <div class="stage-map" id="stageMap"></div>
+      <p class="label" style="margin-top:14px">质量门禁</p>
+      <div class="gates" id="gates"></div>
+      <p class="label" style="margin-top:16px">可推进到</p>
+      <div class="actions" id="nextStages"></div>
+      <div id="releaseBox" hidden>
+        <p class="label" style="margin-top:14px">放行回哪个阶段</p>
+        <input id="releaseTo" placeholder="例如 IMPLEMENT">
+        <p class="label" style="margin-top:10px">为什么可以继续（会记入历史）</p>
+        <textarea id="releaseNote" placeholder="写清原因，别写空话"></textarea>
+        <div class="actions"><button class="btn" id="releaseBtn">放行</button><button class="btn danger" id="blockBtn">强制阻塞</button></div>
+      </div>
+    </div>
+  </details>
+
+  <details class="card fold">
+    <summary><span class="fold-title">历史记录</span><span class="badge" id="count">0</span></summary>
+    <div class="body">
+      <input id="historyFilter" placeholder="筛选：阶段 / 门禁 / 备注">
+      <div class="timeline" id="history" style="margin-top:10px"><div class="empty">还没有阶段变化。</div></div>
+    </div>
+  </details>
+
+  <details class="card fold">
+    <summary><span class="fold-title">运行记录</span><span class="badge" id="taskCount">0</span></summary>
+    <div class="body" id="tasks"><div class="empty">还没有任务记录。</div></div>
+  </details>
+
+  <div class="msg" id="actionMsg"></div>
 </div>
 <script>
 const $=id=>document.getElementById(id);
 const stageNames={INTAKE:'接单',CLARIFY:'澄清',BASELINE:'基线',SPEC:'需求规格',PLAN:'计划',DISPATCH:'派工',IMPLEMENT:'实现',REVIEW:'审查',VERIFY:'验证',INTEGRATE:'集成',ACCEPT:'验收',DELIVER:'交付',ARCHIVE:'归档',BLOCKED:'已阻塞'};
 const gateOrder=['G0','G1','G2','G3','G4','G5'];
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
+const hint=(text)=>el('p','hintline',text);
 let lastBlockedFrom=null;
 let projectLoaded=false;
-async function load(){
-  const r=await fetch('/api/state');const s=await r.json();
-  $('stageHint').textContent=s.stage==='BLOCKED'?'等待人工处理':'当前阶段（代码：'+s.stage+'）';
-  const badge=$('state');badge.textContent=s.blocked?'已阻塞':'进行中';badge.className='badge'+(s.blocked?' warn':'');
-  renderStageMap(s);
-  const gates=$('gates');gates.replaceChildren();
-  for(const g of gateOrder){const on=s.passedGates.includes(g);gates.append(el('span','gate'+(on?' on':''),g+(on?' ✓':'')));}
-  const lastBlocked=[...s.history].reverse().find(h=>h.to==='BLOCKED');
-  lastBlockedFrom=lastBlocked?lastBlocked.from:null;
-  $('releaseBox').hidden=!s.blocked;
-  if(s.blocked&&lastBlockedFrom)$('releaseTo').value=lastBlockedFrom;
-  const next=$('nextStages');next.replaceChildren();
-  for(const edge of s.nextStages){
-    if(edge.to==='BLOCKED')continue;
-    const b=el('button','ghost',(stageNames[edge.to]||edge.to)+(edge.gate?' ('+edge.gate+')':''));
-    b.onclick=()=>post('/api/advance',{to:edge.to,note:'从面板推进'});
-    if(edge.gate)b.disabled=true;
-    if(edge.gate)b.title='这一步需要门禁证据，跑一个任务来产生';
-    next.append(b);
-  }
-  renderProject(s.project);
-  renderTasks(s);
-  renderRunning(s.running,s.lastRun,s.outputLines);
-  $('count').textContent=String(s.history.length);
-  const h=$('history');h.replaceChildren();
-  if(!s.history.length)h.append(el('div','empty','还没有阶段变化。'));
-  const filtered=[...s.history].reverse().filter(rec=>{
-    if(!historyFilterValue)return true;
-    const from=stageNames[rec.from]||rec.from,to=stageNames[rec.to]||rec.to;
-    const hay=(from+' '+to+' '+(rec.gate||'')+' '+(rec.note||'')).toLowerCase();
-    return hay.includes(historyFilterValue);
-  });
-  if(!filtered.length)h.append(el('div','empty','没有匹配的阶段变化。'));
-  for(const rec of filtered){
-    const item=el('div','item');
-    const line=el('div',null);line.append(el('b',null,(stageNames[rec.from]||rec.from)+' → '+(stageNames[rec.to]||rec.to)));
-    if(rec.gate)line.append(el('span','mono','  '+rec.gate+(rec.verdict&&rec.verdict.passed?' 通过':' 未通过')));
-    item.append(line,el('div','mono',new Date(rec.at).toLocaleString()+(rec.note?' · '+rec.note:'')));
-    if(rec.verdict&&!rec.verdict.passed&&rec.verdict.blocking.length){item.append(el('div','mono','拦截：'+rec.verdict.blocking.join('; ')));}
-    h.append(item);
-  }
-  $('taskCount').textContent=String(s.tasks.length);
-  const t=$('tasks');t.replaceChildren();
-  if(!s.tasks.length)t.append(el('div','empty','还没有任务记录。'));
-  for(const task of s.tasks){
-    const item=el('div','item');
-    item.append(el('b',null,task.taskId));
-    item.append(el('div','mono',task.files.join(' · ')));
-    if(task.failure){item.append(el('div','mono','失败：'+(task.failure.reason||'')+' — '+(task.failure.detail||'')));}
-    t.append(item);
-  }
-}
-function renderStageMap(s){
-  const map=$('stageMap');if(!map)return;
-  map.replaceChildren();
-  const order=Object.keys(stageNames).filter(k=>k!=='BLOCKED');
-  const idx=order.indexOf(s.stage);
-  order.forEach((name,i)=>{
-    const row=el('div','stage-row');
-    if(i<idx)row.className='stage-row done';
-    else if(i===idx)row.className='stage-row current';
-    if(s.stage==='BLOCKED'&&i===idx-1)row.className='stage-row blocked';
-    row.append(el('span','stage-idx',String(i+1).padStart(2,'0')));
-    row.append(el('span','stage-name',stageNames[name]));
-    if(i===idx)row.append(el('span','stage-state','ACTIVE'));
-    map.append(row);
-    if(i<order.length-1)map.append(el('div','stage-connector'));
-  });
-}
-/**
- * The form keeps its own model. Loading from the server only happens once, so
- * a half-typed requirement is not overwritten by the 3-second refresh.
- */
-const form={requirements:[],tasks:[]};
-function reqRow(req,ri){
-  const box=el('div','req');
-  const head=el('div','item-head');
-  head.append(el('b',null,req.req_id||'新需求'));
-  const rm=el('button','ghost','删除');
-  rm.onclick=()=>{form.requirements.splice(ri,1);drawForm();};
-  head.append(rm);box.append(head);
+let historyFilterValue='';
 
-  const idIn=el('input');idIn.value=req.req_id||'';idIn.placeholder='REQ-1';
-  idIn.oninput=()=>{req.req_id=idIn.value;};
-  const stIn=el('textarea');stIn.value=req.statement||'';stIn.placeholder='这条需求要解决什么';
-  stIn.oninput=()=>{req.statement=stIn.value;};
-  box.append(el('p','label','需求编号'),idIn,el('p','label','描述'),stIn);
-
-  const acBox=el('div','ac-list');
-  (req.acceptance||[]).forEach((ac,ai)=>{
-    const a=el('div','ac');
-    const ah=el('div','item-head');
-    ah.append(el('b',null,ac.ac_id||'新验收项'));
-    const ar=el('button','ghost','删除');
-    ar.onclick=()=>{req.acceptance.splice(ai,1);drawForm();};
-    ah.append(ar);a.append(ah);
-    const acId=el('input');acId.value=ac.ac_id||'';acId.placeholder='AC-1';
-    acId.oninput=()=>{ac.ac_id=acId.value;};
-    const desc=el('input');desc.value=ac.description||'';desc.placeholder='怎么算通过';
-    desc.oninput=()=>{ac.description=desc.value;};
-    const kind=el('input');kind.value=ac.kind||'automated';kind.placeholder='automated 或 manual';
-    kind.oninput=()=>{ac.kind=kind.value;ac.requirement_id=req.req_id;};
-    const cmd=el('input');cmd.value=ac.verification_command||'';cmd.placeholder='自动检查用的命令';
-    cmd.oninput=()=>{ac.verification_command=cmd.value;};
-    a.append(el('p','label','验收编号'),acId,el('p','label','描述'),desc,el('p','label','类型'),kind,el('p','label','命令（automated 必填）'),cmd);
-    acBox.append(a);
-  });
-  const addAc=el('button','ghost','+ 加验收项');
-  addAc.onclick=()=>{(req.acceptance=req.acceptance||[]).push({ac_id:'',requirement_id:req.req_id||'',description:'',kind:'automated',verification_command:''});drawForm();};
-  acBox.append(addAc);
-  box.append(acBox);
-  return box;
-}
-function taskRow(task,ti){
-  const box=el('div','req');
-  const head=el('div','item-head');
-  head.append(el('b',null,task.role),el('span','mono','  '+(task.task_id||'')));
-  const rm=el('button','ghost','删除');
-  rm.onclick=()=>{form.tasks.splice(ti,1);drawForm();};
-  head.append(rm);box.append(head);
-  const mk=(label,key,placeholder)=>{const i=el('input');i.value=task[key]||'';i.placeholder=placeholder;i.oninput=()=>{task[key]=i.value;};return [el('p','label',label),i];};
-  const idI=mk('任务编号','task_id','T-1');
-  const roleI=mk('角色','role','developer / tester / reviewer');
-  const objI=mk('目标','objective','要做什么');
-  const pathsI=mk('可写目录（逗号分隔）','allowed_paths','src, test');
-  const delivI=mk('交付物（逗号分隔）','deliverables','src/x.js');
-  const acsI=mk('验收编号（逗号分隔）','acceptance_ids','AC-1');
-  const depsI=mk('依赖任务（逗号分隔）','dependencies','T-0');
-  for(const pair of [idI,roleI,objI,pathsI,delivI,acsI,depsI])box.append(...pair);
-  // Array fields need splitting on comma; bind once after the inputs exist.
-  pathsI[1].oninput=()=>{task.allowed_paths=pathsI[1].value.split(',').map(s=>s.trim()).filter(Boolean);};
-  delivI[1].oninput=()=>{task.deliverables=delivI[1].value.split(',').map(s=>s.trim()).filter(Boolean);};
-  acsI[1].oninput=()=>{task.acceptance_ids=acsI[1].value.split(',').map(s=>s.trim()).filter(Boolean);};
-  depsI[1].oninput=()=>{task.dependencies=depsI[1].value.split(',').map(s=>s.trim()).filter(Boolean);};
-  return box;
-}
-function drawForm(){
-  const rl=$('reqList');rl.replaceChildren();
-  if(!form.requirements.length)rl.append(el('div','empty','还没有需求。点下面的按钮加一条。'));
-  form.requirements.forEach((r,i)=>rl.append(reqRow(r,i)));
-  const tf=$('taskForm');tf.replaceChildren();
-  if(!form.tasks.length)tf.append(el('div','empty','还没有任务。点下面的按钮加一个。'));
-  form.tasks.forEach((t,i)=>tf.append(taskRow(t,i)));
-}
+/* ---------- 第 1 步：项目 ---------- */
 function renderProject(project){
   const badge=$('projState');
   if(!project){badge.textContent='未配置';badge.className='badge warn';return;}
@@ -918,79 +836,15 @@ function renderProject(project){
     projectLoaded=true;
   }
 }
-function renderTasks(s){
-  const list=$('taskList');
-  if(!s.project){list.replaceChildren(el('div','empty','先保存项目配置。'));return;}
-  const fingerprint=JSON.stringify([s.project.tasks.map(t=>t.task_id),s.running,s.lastRun]);
-  if(list.dataset.fp===fingerprint)return;
-  list.dataset.fp=fingerprint;
-  list.replaceChildren();
-  for(const task of s.project.tasks){
-    const item=el('div','item');
-    const head=el('div');
-    head.append(el('b',null,task.role),el('span','mono','  '+task.task_id));
-    item.append(head,el('div','mono',task.objective.slice(0,160)));
-    const btn=el('button',null,'运行这个任务');
-    btn.style.marginTop='8px';
-    btn.disabled=!!s.running;
-    btn.onclick=()=>runTask(task.task_id);
-    item.append(btn);
-    list.append(item);
-  }
-}
-function renderRunning(running,lastRun,outputLines){
-  const badge=$('runState');
-  const outBox=$('outputCard');
-  if(running){
-    // A plan's taskId is the literal "PLAN"; currentTask is the task actually
-    // in flight. Show both so the badge never claims a plan is a single task.
-    const shown=running.currentTask&&running.currentTask!==running.taskId
-      ?running.taskId+' › '+running.currentTask
-      :(running.currentTask||running.taskId);
-    badge.textContent='运行中：'+shown+(running.cancelling?'（正在取消）':'');badge.className='badge warn';
-    outBox.hidden=false;$('cancelBtn').disabled=running.cancelling;
-    $('output').textContent=(outputLines||[]).join('').slice(-2000);
-    return;
-  }
-  if(lastRun){
-    badge.textContent=(lastRun.ok?'完成':'失败')+'：'+lastRun.taskId;badge.className='badge'+(lastRun.ok?'':' bad');
-    if(outputLines&&outputLines.length){outBox.hidden=false;$('output').textContent=outputLines.join('').slice(-2000);}
-    return;
-  }
-  badge.textContent='空闲';badge.className='badge';
-}
-$('cancelBtn').onclick=async()=>{
-  const m=$('actionMsg');
-  const r=await fetch('/api/cancel',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
-  const v=await r.json();
-  if(!r.ok){m.className='msg err';m.textContent=v.error||'取消失败';return;}
-  m.className='msg';m.textContent='已请求取消';load();
-};
-async function runTask(taskId){
-  const r=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({taskId})});
-  const v=await r.json();
-  const m=$('actionMsg');
-  if(!r.ok){m.className='msg err';m.textContent=v.error||'启动失败';return;}
-  m.className='msg';m.textContent='已启动，任务在后台跑，页面每 3 秒刷新';load();
-}
-$('runPlanBtn').onclick=async()=>{
-  const m=$('actionMsg');
-  const r=await fetch('/api/run-plan',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
-  const v=await r.json();
-  if(!r.ok){m.className='msg err';m.textContent=v.error||'启动失败';return;}
-  m.className='msg';m.textContent='已启动整个计划，后台按依赖顺序跑';load();
-};
+
 $('saveProject').onclick=async()=>{
   const m=$('projMsg');
-  // Fill the fields the form cannot show, then send the whole model. The
-  // server validates it; the browser does not try to be clever about shape.
   const requirements=form.requirements.map(r=>({
     ...r,
     acceptance:(r.acceptance||[]).map(a=>({
       ...a,
       requirement_id:r.req_id,
       ...(a.kind==='manual'?{manual_check:a.manual_check||{owner:'He',procedure:'人工确认'}}:{}),
-      ...(a.kind==='automated'&&!a.verification_command?{}:{}),
     })),
   }));
   const tasks=form.tasks.map(t=>({
@@ -1002,14 +856,367 @@ $('saveProject').onclick=async()=>{
     acceptance_ids:t.acceptance_ids||[],
     verification_commands:t.verification_commands||[],
   }));
-  const body={name:$('pName').value.trim(),repo_path:$('pRepo').value.trim(),model:$('pModel').value.trim(),sandbox:$('pSandbox').value.trim()||'bypass',requirements,tasks};
+  const body={
+    name:$('pName').value.trim(),
+    repo_path:$('pRepo').value.trim(),
+    model:$('pModel').value.trim(),
+    sandbox:$('pSandbox').value.trim()||'bypass',
+    requirements,tasks,
+  };
   const r=await fetch('/api/project',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   const v=await r.json();
-  if(!r.ok){m.className='msg err';m.textContent=v.error||'保存失败';return;}
+  if(!r.ok){m.className='msg err';m.textContent=translateError(v.error||'保存失败');return;}
   m.className='msg';m.textContent='已保存';projectLoaded=false;load();
 };
-$('addReq').onclick=()=>{form.requirements.push({req_id:'',statement:'',acceptance:[]});drawForm();};
-$('addTask').onclick=()=>{form.tasks.push({task_id:'',role:'developer',objective:'',allowed_paths:[],deliverables:[],acceptance_ids:[],dependencies:[]});drawForm();};
+
+/* 把后端英文报错翻成人话 */
+function translateError(text){
+  if(/repo_path does not exist/.test(text))return '代码目录不存在，检查路径是否填对。';
+  if(/no project configured/.test(text))return '还没有保存项目，先完成第 1 步。';
+  if(/a run is already in progress/.test(text))return '已有任务在跑，等它结束或点中断。';
+  if(/nothing is running/.test(text))return '当前没有任务在跑。';
+  if(/gated by/.test(text))return '这一步有质量门禁，需要先跑任务产出证据。';
+  if(/does not exist/.test(text))return '目录不存在：'+text;
+  return text;
+}
+
+/* ---------- 第 2 步：需求 ---------- */
+const form={requirements:[],tasks:[]};
+
+function reqRow(req,ri){
+  const box=el('div','req');
+  const head=el('div','item-head');
+  head.append(el('b',null,req.req_id||'新需求'));
+  const rm=el('button','ghost','删除');
+  rm.onclick=()=>{form.requirements.splice(ri,1);drawForm();};
+  head.append(rm);box.append(head);
+
+  const idIn=el('input');idIn.value=req.req_id||'';idIn.placeholder='REQ-1';
+  idIn.oninput=()=>{req.req_id=idIn.value;};
+  const stIn=el('textarea');stIn.value=req.statement||'';stIn.placeholder='例如：让 add() 返回两数之和';
+  stIn.oninput=()=>{req.statement=stIn.value;};
+
+  box.append(el('p','label','需求编号'),idIn,
+             hint('从 REQ-1 开始，往后递增。'),
+             el('p','label','这条需求要解决什么'),stIn,
+             hint('用一句话说清目标，别写实现细节。'));
+
+  const acBox=el('div','ac-list');
+  (req.acceptance||[]).forEach((ac,ai)=>{
+    const a=el('div','ac');
+    const ah=el('div','item-head');
+    ah.append(el('b',null,ac.ac_id||'新验收项'));
+    const ar=el('button','ghost','删除');
+    ar.onclick=()=>{req.acceptance.splice(ai,1);drawForm();};
+    ah.append(ar);a.append(ah);
+
+    const acId=el('input');acId.value=ac.ac_id||'';acId.placeholder='AC-1';
+    acId.oninput=()=>{ac.ac_id=acId.value;};
+    const desc=el('input');desc.value=ac.description||'';desc.placeholder='例如：add(1,2) 返回 3';
+    desc.oninput=()=>{ac.description=desc.value;};
+
+    const kind=el('select');
+    [['automated','自动检查（跑命令）'],['manual','人工确认']].forEach(([v,t])=>{
+      const o=el('option',null,t);o.value=v;kind.append(o);
+    });
+    kind.value=ac.kind||'automated';
+    kind.onchange=()=>{ac.kind=kind.value;ac.requirement_id=req.req_id;drawForm();};
+
+    a.append(el('p','label','验收编号'),acId,
+             el('p','label','怎么算通过'),desc,
+             hint('写成可判断的事实，不要写「做得好」。'),
+             el('p','label','检查方式'),kind);
+
+    if(ac.kind!=='manual'){
+      const cmd=el('input');cmd.value=ac.verification_command||'';
+      cmd.placeholder='例如：node --test';
+      cmd.oninput=()=>{ac.verification_command=cmd.value;};
+      a.append(el('p','label','跑哪条命令'),cmd,
+               hint('必须真的输出测试结果。只打印 ok 的脚本会被门禁拒绝。'));
+    }
+    acBox.append(a);
+  });
+
+  const addAc=el('button','ghost','+ 加验收项');
+  addAc.onclick=()=>{
+    (req.acceptance=req.acceptance||[]).push({
+      ac_id:'',requirement_id:req.req_id||'',description:'',kind:'automated',verification_command:''
+    });
+    drawForm();
+  };
+  acBox.append(addAc);
+  box.append(acBox);
+  return box;
+}
+
+/* ---------- 第 3 步：任务 ---------- */
+function taskRow(task,ti){
+  const box=el('div','req');
+  const head=el('div','item-head');
+  head.append(el('b',null,(task.task_id||'新任务')+' · '+(task.role||'developer')));
+  const rm=el('button','ghost','删除');
+  rm.onclick=()=>{form.tasks.splice(ti,1);drawForm();};
+  head.append(rm);box.append(head);
+
+  const mk=(label,key,placeholder,help)=>{
+    const i=el('input');i.value=task[key]||'';i.placeholder=placeholder;
+    i.oninput=()=>{task[key]=i.value;};
+    const parts=[el('p','label',label),i];
+    if(help)parts.push(hint(help));
+    return parts;
+  };
+  const list=(label,key,placeholder,help,parse)=>{
+    const i=el('input');i.value=(task[key]||[]).join(', ');i.placeholder=placeholder;
+    i.oninput=()=>{task[key]=parse(i.value);};
+    const parts=[el('p','label',label),i];
+    if(help)parts.push(hint(help));
+    return parts;
+  };
+  const comma=v=>v.split(',').map(s=>s.trim()).filter(Boolean);
+
+  const roleSel=el('select');
+  [['developer','developer · 写代码'],['tester','tester · 写测试'],['reviewer','reviewer · 审查']].forEach(([v,t])=>{
+    const o=el('option',null,t);o.value=v;roleSel.append(o);
+  });
+  roleSel.value=task.role||'developer';
+  roleSel.onchange=()=>{task.role=roleSel.value;drawForm();};
+
+  box.append(...mk('任务编号','task_id','T-1','从 T-1 开始。'),
+             el('p','label','角色'),roleSel,
+             ...mk('这个任务要做什么','objective','例如：实现 add() 并写测试',''),
+             ...list('允许修改哪些文件','allowed_paths','src/a.js, test/a.test.js',
+                    '逗号分隔。写相对路径，越界的改动会被拦下。',comma),
+             ...list('产出哪些文件','deliverables','src/a.js',
+                    '逗号分隔。不改文件的任务填 (none)。',comma),
+             ...list('对应哪些验收项','acceptance_ids','AC-1',
+                    '逗号分隔，必须是第 2 步里存在的编号。',comma),
+             ...list('依赖哪些任务','dependencies','T-0',
+                    '逗号分隔。没有依赖就留空。',comma));
+  return box;
+}
+
+function drawForm(){
+  const rl=$('reqList');rl.replaceChildren();
+  if(!form.requirements.length)rl.append(el('div','empty','还没有需求。点下面的按钮加一条。'));
+  form.requirements.forEach((r,i)=>rl.append(reqRow(r,i)));
+
+  const tf=$('taskForm');tf.replaceChildren();
+  if(!form.tasks.length)tf.append(el('div','empty','还没有任务。点下面的按钮加一个。'));
+  form.tasks.forEach((t,i)=>tf.append(taskRow(t,i)));
+}
+
+$('addReq').onclick=()=>{
+  const n=form.requirements.length+1;
+  form.requirements.push({req_id:'REQ-'+n,statement:'',acceptance:[
+    {ac_id:'AC-'+n,requirement_id:'REQ-'+n,description:'',kind:'automated',verification_command:''}
+  ]});
+  drawForm();
+};
+$('addTask').onclick=()=>{
+  const n=form.tasks.length+1;
+  form.tasks.push({task_id:'T-'+n,role:'developer',objective:'',allowed_paths:[],deliverables:[],acceptance_ids:[],dependencies:[]});
+  drawForm();
+};
+
+/* ---------- 第 4 步：运行 ---------- */
+function renderTasks(s){
+  const list=$('taskList');
+  if(!s.project){list.replaceChildren(el('div','empty','先在第 1 步保存项目。'));return;}
+  const fp=JSON.stringify([s.project.tasks.map(t=>t.task_id),s.running,s.lastRun]);
+  if(list.dataset.fp===fp)return;
+  list.dataset.fp=fp;
+  list.replaceChildren();
+  for(const task of s.project.tasks){
+    const card=el('div','req');
+    const head=el('div','item-head');
+    head.append(el('b',null,stageRole(task.role)+' · '+task.task_id));
+    card.append(head,el('div','mono',task.objective));
+    const btn=el('button','ghost sm','只跑这个任务');
+    btn.style.marginTop='10px';
+    btn.disabled=!!s.running;
+    btn.onclick=()=>runTask(task.task_id);
+    card.append(btn);
+    list.append(card);
+  }
+}
+function stageRole(r){
+  return ({developer:'开发者',tester:'测试',reviewer:'审查'})[r]||r;
+}
+
+function renderRunning(running,lastRun,outputLines){
+  const badge=$('runState');
+  const outBox=$('outputCard');
+  if(running){
+    const shown=running.currentTask&&running.currentTask!==running.taskId
+      ?running.taskId+' › '+running.currentTask
+      :(running.currentTask||running.taskId);
+    badge.textContent='运行中：'+shown+(running.cancelling?'（正在取消）':'');
+    badge.className='badge warn';
+    outBox.hidden=false;
+    $('cancelBtn').disabled=running.cancelling;
+    $('output').textContent=(outputLines||[]).join('').slice(-4000);
+    return;
+  }
+  if(lastRun){
+    badge.textContent=(lastRun.ok?'完成':'失败')+'：'+lastRun.taskId;
+    badge.className='badge'+(lastRun.ok?'':' bad');
+    if(outputLines&&outputLines.length){
+      outBox.hidden=false;
+      $('output').textContent=outputLines.join('').slice(-4000);
+    }
+    return;
+  }
+  badge.textContent='空闲';badge.className='badge';
+}
+
+$('runPlanBtn').onclick=async()=>{
+  const m=$('actionMsg');
+  const r=await fetch('/api/run-plan',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+  const v=await r.json();
+  if(!r.ok){m.className='msg err';m.textContent=translateError(v.error||'启动失败');return;}
+  m.className='msg';m.textContent='已开始，按依赖顺序跑';
+  load();
+};
+async function runTask(taskId){
+  const r=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({taskId})});
+  const v=await r.json();
+  const m=$('actionMsg');
+  if(!r.ok){m.className='msg err';m.textContent=translateError(v.error||'启动失败');return;}
+  m.className='msg';m.textContent='已开始跑 '+taskId;
+  load();
+}
+$('cancelBtn').onclick=async()=>{
+  const m=$('actionMsg');
+  const r=await fetch('/api/cancel',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+  const v=await r.json();
+  if(!r.ok){m.className='msg err';m.textContent=translateError(v.error||'取消失败');return;}
+  m.className='msg';m.textContent='已请求中断，剩下的任务不会再派';
+  load();
+};
+
+/* ---------- 折叠区 ---------- */
+function renderStageMap(s){
+  const map=$('stageMap');if(!map)return;
+  map.replaceChildren();
+  const order=Object.keys(stageNames).filter(k=>k!=='BLOCKED');
+  const idx=order.indexOf(s.stage);
+  order.forEach((name,i)=>{
+    const row=el('div','stage-row');
+    if(i<idx)row.className='stage-row done';
+    else if(i===idx)row.className='stage-row current';
+    if(s.stage==='BLOCKED'&&i===Math.max(idx-1,0))row.className='stage-row blocked';
+    row.append(el('span','stage-idx',String(i+1)));
+    row.append(el('span','stage-name',stageNames[name]));
+    if(i===idx)row.append(el('span','stage-state','当前'));
+    map.append(row);
+    if(i<order.length-1)map.append(el('div','stage-connector'));
+  });
+}
+
+async function load(){
+  const r=await fetch('/api/state');const s=await r.json();
+
+  $('stageHint').textContent=s.stage==='BLOCKED'
+    ?'流水线已阻塞，等你在下面放行。'
+    :'当前阶段：'+stageNames[s.stage]+'（'+s.stage+'）';
+  const badge=$('state');
+  badge.textContent=s.blocked?'已阻塞':'进行中';
+  badge.className='badge'+(s.blocked?' warn':'');
+
+  renderStageMap(s);
+  const gates=$('gates');gates.replaceChildren();
+  for(const g of gateOrder){
+    const on=s.passedGates.includes(g);
+    const label=g+(on?' ✓':'');
+    gates.append(el('span','gate'+(on?' on':''),label));
+  }
+
+  const lastBlocked=[...s.history].reverse().find(h=>h.to==='BLOCKED');
+  lastBlockedFrom=lastBlocked?lastBlocked.from:null;
+  $('releaseBox').hidden=!s.blocked;
+  if(s.blocked&&lastBlockedFrom)$('releaseTo').value=lastBlockedFrom;
+
+  const next=$('nextStages');next.replaceChildren();
+  for(const edge of s.nextStages){
+    if(edge.to==='BLOCKED')continue;
+    const b=el('button','ghost sm',stageNames[edge.to]+(edge.gate?' · '+edge.gate:''));
+    b.onclick=()=>post('/api/advance',{to:edge.to,note:'从面板推进'});
+    if(edge.gate){b.disabled=true;b.title='这一步需要门禁证据，先跑任务';}
+    next.append(b);
+  }
+
+  renderProject(s.project);
+  renderTasks(s);
+  renderRunning(s.running,s.lastRun,s.outputLines);
+
+  $('count').textContent=String(s.history.length);
+  const h=$('history');h.replaceChildren();
+  if(!s.history.length)h.append(el('div','empty','还没有阶段变化。'));
+  const filtered=[...s.history].reverse().filter(rec=>{
+    if(!historyFilterValue)return true;
+    const from=stageNames[rec.from]||rec.from,to=stageNames[rec.to]||rec.to;
+    return (from+' '+to+' '+(rec.gate||'')+' '+(rec.note||'')).toLowerCase().includes(historyFilterValue);
+  });
+  if(!filtered.length)h.append(el('div','empty','没有匹配的记录。'));
+  for(const rec of filtered){
+    const item=el('div','item');
+    const line=el('div');
+    line.append(el('b',null,(stageNames[rec.from]||rec.from)+' → '+(stageNames[rec.to]||rec.to)));
+    if(rec.gate)line.append(el('span','mono','  '+rec.gate+(rec.verdict&&rec.verdict.passed?' 通过':' 未通过')));
+    item.append(line,el('div','mono',new Date(rec.at).toLocaleString()+(rec.note?' · '+rec.note:'')));
+    if(rec.verdict&&!rec.verdict.passed&&rec.verdict.blocking.length){
+      item.append(el('div','mono','拦截：'+rec.verdict.blocking.join('; ')));
+    }
+    h.append(item);
+  }
+
+  $('taskCount').textContent=String(s.tasks.length);
+  const t=$('tasks');t.replaceChildren();
+  if(!s.tasks.length)t.append(el('div','empty','还没有任务记录。'));
+  for(const task of s.tasks){
+    const item=el('div','item');
+    item.append(el('b',null,task.taskId));
+    item.append(el('div','mono',task.files.join(' · ')));
+    if(task.failure){
+      const f=task.failure;
+      item.append(el('div','mono','失败：'+translateFailure(f.reason)+' — '+(f.detail||'')));
+    }
+    t.append(item);
+  }
+}
+function translateFailure(reason){
+  return ({
+    'adapter-error':'子进程出错',
+    'attempts-exhausted':'重试次数用完',
+    'gate-refused':'门禁拒绝',
+    'no-progress':'没有进展',
+    'cancelled':'已取消',
+    'panel-error':'面板出错',
+    'unreadable':'记录损坏',
+  })[reason]||reason;
+}
+
+$('historyFilter').oninput=e=>{historyFilterValue=e.target.value.trim().toLowerCase();};
+
+async function post(route,body){
+  const r=await fetch(route,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const v=await r.json();
+  const m=$('actionMsg');
+  if(!r.ok){
+    m.className='msg err';
+    m.textContent=translateError(v.error||v.refused?.detail||'操作失败');
+    return;
+  }
+  m.className='msg';m.textContent='已记录';
+  load();
+}
+$('releaseBtn').onclick=()=>post('/api/release',{
+  to:$('releaseTo').value.trim(),from:lastBlockedFrom,
+  note:$('releaseNote').value.trim()||'人工放行'
+});
+$('blockBtn').onclick=()=>post('/api/block',{note:$('releaseNote').value.trim()||'人工阻塞'});
+
+/* ---------- 导入导出 ---------- */
 $('exportJson').onclick=()=>{
   const payload={
     name:$('pName').value.trim(),repo_path:$('pRepo').value.trim(),
@@ -1021,7 +1228,7 @@ $('exportJson').onclick=()=>{
   URL.revokeObjectURL(a.href);
 };
 $('importJson').onclick=()=>{$('importFile').click();};
-$('importFile').onchange=async(e)=>{
+$('importFile').onchange=async e=>{
   const file=e.target.files[0];
   if(!file)return;
   const text=await file.text();
@@ -1036,19 +1243,13 @@ $('importFile').onchange=async(e)=>{
     form.tasks=JSON.parse(JSON.stringify(data.tasks||[]));
     projectLoaded=false;drawForm();
     m.className='msg';m.textContent='已导入，检查后点保存';
-  }catch(err){m.className='msg err';m.textContent='导入失败：'+err.message;}
+  }catch(err){
+    m.className='msg err';m.textContent='导入失败：'+err.message;
+  }
   e.target.value='';
 };
-let historyFilterValue='';
-$('historyFilter').oninput=(e)=>{historyFilterValue=e.target.value.trim().toLowerCase();};
+
 drawForm();
-async function post(route,body){
-  const r=await fetch(route,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-  const v=await r.json();const m=$('actionMsg');
-  if(!r.ok){m.className='msg err';m.textContent=v.error||v.refused?.detail||'操作失败';return;}
-  m.className='msg';m.textContent='已记录';load();
-}
-$('releaseBtn').onclick=()=>post('/api/release',{to:$('releaseTo').value.trim(),from:lastBlockedFrom,note:$('releaseNote').value.trim()||'人工放行'});
-$('blockBtn').onclick=()=>post('/api/block',{note:$('releaseNote').value.trim()||'人工阻塞'});
-load();setInterval(load,3000);
+load();
+setInterval(load,3000);
 </script></body></html>`;

@@ -1,0 +1,130 @@
+<div class="topbar">
+  <div class="brand"><div class="logo">AO</div><div><h1>流水线控制台</h1><div class="tag">四步走完一个任务</div></div></div>
+  <div class="top-actions">
+    <span class="status-pill"><span class="dot"></span>已连接</span>
+    <span class="status-pill" id="runState">空闲</span>
+    <button class="btn ghost sm" id="exportJson">导出配置</button>
+    <button class="btn ghost sm" id="importJson">导入配置</button>
+    <input id="importFile" type="file" accept="application/json,.json" hidden>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- 第 1 步 -->
+  <section class="card step">
+    <div class="head">
+      <div class="step-title"><span class="step-no">1</span><h2>选一个项目</h2></div>
+      <span class="badge idle" id="projState">未配置</span>
+    </div>
+    <div class="body">
+      <p class="lead">先告诉它要在哪个代码目录里干活。</p>
+
+      <div class="grid2">
+        <div>
+          <p class="label">项目名称</p>
+          <input id="pName" placeholder="随便起，例如 myproj">
+          <p class="hintline">只用来显示，不影响执行。</p>
+        </div>
+        <div>
+          <p class="label">沙箱</p>
+          <input id="pSandbox" value="bypass">
+          <p class="hintline">这台机器必须填 bypass，否则子进程无法执行命令。</p>
+        </div>
+      </div>
+
+      <p class="label">代码目录（绝对路径，必须已存在）</p>
+      <input id="pRepo" placeholder="C:\work\myproj">
+      <p class="hintline">例：<code>C:\work\myproj</code>。填错会直接报「目录不存在」。</p>
+
+      <p class="label">模型</p>
+      <input id="pModel" value="deepseek-v4.1-flash-solo">
+      <p class="hintline">用你代理里实际可用的模型 ID，不确定就保持默认。</p>
+
+      <div class="actions"><button class="btn" id="saveProject">保存项目</button></div>
+      <div class="msg" id="projMsg"></div>
+    </div>
+  </section>
+
+  <!-- 第 2 步 -->
+  <section class="card step">
+    <div class="head">
+      <div class="step-title"><span class="step-no">2</span><h2>说清要做什么</h2></div>
+      <span class="hint">需求 + 怎么算通过</span>
+    </div>
+    <div class="body">
+      <p class="lead">一条需求配一个验收项：一条说「要什么」，一条说「怎么算做到」。</p>
+      <div id="reqList"></div>
+      <div class="actions"><button class="btn ghost" id="addReq">+ 加一条需求</button></div>
+    </div>
+  </section>
+
+  <!-- 第 3 步 -->
+  <section class="card step">
+    <div class="head">
+      <div class="step-title"><span class="step-no">3</span><h2>拆成几个任务</h2></div>
+      <span class="hint">每个任务交给一个子进程做</span>
+    </div>
+    <div class="body">
+      <p class="lead">任务按依赖顺序执行。有依赖的填「依赖任务」，没有就留空。</p>
+      <div id="taskForm"></div>
+      <div class="actions"><button class="btn ghost" id="addTask">+ 加一个任务</button></div>
+    </div>
+  </section>
+
+  <!-- 第 4 步 -->
+  <section class="card step">
+    <div class="head">
+      <div class="step-title"><span class="step-no">4</span><h2>跑起来</h2></div>
+      <span class="hint">跑完会自动推进阶段</span>
+    </div>
+    <div class="body">
+      <p class="lead">保存过项目之后，这里会列出任务。点「开始执行」按依赖顺序跑完整份计划。</p>
+      <div id="taskList"><div class="empty">先在第 1 步保存项目。</div></div>
+      <div class="actions"><button class="btn" id="runPlanBtn" style="width:100%">▶ 开始执行</button></div>
+
+      <section id="outputCard" hidden style="margin-top:14px">
+        <div class="sub-head">
+          <span class="label" style="margin:0">实时输出</span>
+          <button class="btn danger sm" id="cancelBtn">中断</button>
+        </div>
+        <div class="output-box" id="output"></div>
+      </section>
+    </div>
+  </section>
+
+  <!-- 折叠区 -->
+  <details class="card fold">
+    <summary><span class="fold-title">流水线进度</span><span class="badge" id="state">读取中</span></summary>
+    <div class="body">
+      <p class="hintline" id="stageHint"></p>
+      <div class="stage-map" id="stageMap"></div>
+      <p class="label" style="margin-top:14px">质量门禁</p>
+      <div class="gates" id="gates"></div>
+      <p class="label" style="margin-top:16px">可推进到</p>
+      <div class="actions" id="nextStages"></div>
+      <div id="releaseBox" hidden>
+        <p class="label" style="margin-top:14px">放行回哪个阶段</p>
+        <input id="releaseTo" placeholder="例如 IMPLEMENT">
+        <p class="label" style="margin-top:10px">为什么可以继续（会记入历史）</p>
+        <textarea id="releaseNote" placeholder="写清原因，别写空话"></textarea>
+        <div class="actions"><button class="btn" id="releaseBtn">放行</button><button class="btn danger" id="blockBtn">强制阻塞</button></div>
+      </div>
+    </div>
+  </details>
+
+  <details class="card fold">
+    <summary><span class="fold-title">历史记录</span><span class="badge" id="count">0</span></summary>
+    <div class="body">
+      <input id="historyFilter" placeholder="筛选：阶段 / 门禁 / 备注">
+      <div class="timeline" id="history" style="margin-top:10px"><div class="empty">还没有阶段变化。</div></div>
+    </div>
+  </details>
+
+  <details class="card fold">
+    <summary><span class="fold-title">运行记录</span><span class="badge" id="taskCount">0</span></summary>
+    <div class="body" id="tasks"><div class="empty">还没有任务记录。</div></div>
+  </details>
+
+  <div class="msg" id="actionMsg"></div>
+</div>

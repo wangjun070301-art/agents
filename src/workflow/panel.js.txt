@@ -1,0 +1,441 @@
+const $=id=>document.getElementById(id);
+const stageNames={INTAKE:'接单',CLARIFY:'澄清',BASELINE:'基线',SPEC:'需求规格',PLAN:'计划',DISPATCH:'派工',IMPLEMENT:'实现',REVIEW:'审查',VERIFY:'验证',INTEGRATE:'集成',ACCEPT:'验收',DELIVER:'交付',ARCHIVE:'归档',BLOCKED:'已阻塞'};
+const gateOrder=['G0','G1','G2','G3','G4','G5'];
+const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
+const hint=(text)=>el('p','hintline',text);
+let lastBlockedFrom=null;
+let projectLoaded=false;
+let historyFilterValue='';
+
+/* ---------- 第 1 步：项目 ---------- */
+function renderProject(project){
+  const badge=$('projState');
+  if(!project){badge.textContent='未配置';badge.className='badge warn';return;}
+  badge.textContent=project.name;badge.className='badge';
+  if(!projectLoaded){
+    $('pName').value=project.name;
+    $('pRepo').value=project.repo_path;
+    $('pModel').value=project.model;
+    $('pSandbox').value=project.sandbox;
+    form.requirements=JSON.parse(JSON.stringify(project.requirements||[]));
+    form.tasks=JSON.parse(JSON.stringify(project.tasks||[]));
+    drawForm();
+    projectLoaded=true;
+  }
+}
+
+$('saveProject').onclick=async()=>{
+  const m=$('projMsg');
+  const requirements=form.requirements.map(r=>({
+    ...r,
+    acceptance:(r.acceptance||[]).map(a=>({
+      ...a,
+      requirement_id:r.req_id,
+      ...(a.kind==='manual'?{manual_check:a.manual_check||{owner:'He',procedure:'人工确认'}}:{}),
+    })),
+  }));
+  const tasks=form.tasks.map(t=>({
+    ...t,
+    repo_path:$('pRepo').value.trim(),
+    base_revision:t.base_revision||'init',
+    allowed_paths:t.allowed_paths||[],
+    deliverables:t.deliverables&&t.deliverables.length?t.deliverables:['(none)'],
+    acceptance_ids:t.acceptance_ids||[],
+    verification_commands:t.verification_commands||[],
+  }));
+  const body={
+    name:$('pName').value.trim(),
+    repo_path:$('pRepo').value.trim(),
+    model:$('pModel').value.trim(),
+    sandbox:$('pSandbox').value.trim()||'bypass',
+    requirements,tasks,
+  };
+  const r=await fetch('/api/project',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const v=await r.json();
+  if(!r.ok){m.className='msg err';m.textContent=translateError(v.error||'保存失败');return;}
+  m.className='msg';m.textContent='已保存';projectLoaded=false;load();
+};
+
+/* 把后端英文报错翻成人话 */
+function translateError(text){
+  if(/repo_path does not exist/.test(text))return '代码目录不存在，检查路径是否填对。';
+  if(/no project configured/.test(text))return '还没有保存项目，先完成第 1 步。';
+  if(/a run is already in progress/.test(text))return '已有任务在跑，等它结束或点中断。';
+  if(/nothing is running/.test(text))return '当前没有任务在跑。';
+  if(/gated by/.test(text))return '这一步有质量门禁，需要先跑任务产出证据。';
+  if(/does not exist/.test(text))return '目录不存在：'+text;
+  return text;
+}
+
+/* ---------- 第 2 步：需求 ---------- */
+const form={requirements:[],tasks:[]};
+
+function reqRow(req,ri){
+  const box=el('div','req');
+  const head=el('div','item-head');
+  head.append(el('b',null,req.req_id||'新需求'));
+  const rm=el('button','ghost','删除');
+  rm.onclick=()=>{form.requirements.splice(ri,1);drawForm();};
+  head.append(rm);box.append(head);
+
+  const idIn=el('input');idIn.value=req.req_id||'';idIn.placeholder='REQ-1';
+  idIn.oninput=()=>{req.req_id=idIn.value;};
+  const stIn=el('textarea');stIn.value=req.statement||'';stIn.placeholder='例如：让 add() 返回两数之和';
+  stIn.oninput=()=>{req.statement=stIn.value;};
+
+  box.append(el('p','label','需求编号'),idIn,
+             hint('从 REQ-1 开始，往后递增。'),
+             el('p','label','这条需求要解决什么'),stIn,
+             hint('用一句话说清目标，别写实现细节。'));
+
+  const acBox=el('div','ac-list');
+  (req.acceptance||[]).forEach((ac,ai)=>{
+    const a=el('div','ac');
+    const ah=el('div','item-head');
+    ah.append(el('b',null,ac.ac_id||'新验收项'));
+    const ar=el('button','ghost','删除');
+    ar.onclick=()=>{req.acceptance.splice(ai,1);drawForm();};
+    ah.append(ar);a.append(ah);
+
+    const acId=el('input');acId.value=ac.ac_id||'';acId.placeholder='AC-1';
+    acId.oninput=()=>{ac.ac_id=acId.value;};
+    const desc=el('input');desc.value=ac.description||'';desc.placeholder='例如：add(1,2) 返回 3';
+    desc.oninput=()=>{ac.description=desc.value;};
+
+    const kind=el('select');
+    [['automated','自动检查（跑命令）'],['manual','人工确认']].forEach(([v,t])=>{
+      const o=el('option',null,t);o.value=v;kind.append(o);
+    });
+    kind.value=ac.kind||'automated';
+    kind.onchange=()=>{ac.kind=kind.value;ac.requirement_id=req.req_id;drawForm();};
+
+    a.append(el('p','label','验收编号'),acId,
+             el('p','label','怎么算通过'),desc,
+             hint('写成可判断的事实，不要写「做得好」。'),
+             el('p','label','检查方式'),kind);
+
+    if(ac.kind!=='manual'){
+      const cmd=el('input');cmd.value=ac.verification_command||'';
+      cmd.placeholder='例如：node --test';
+      cmd.oninput=()=>{ac.verification_command=cmd.value;};
+      a.append(el('p','label','跑哪条命令'),cmd,
+               hint('必须真的输出测试结果。只打印 ok 的脚本会被门禁拒绝。'));
+    }
+    acBox.append(a);
+  });
+
+  const addAc=el('button','ghost','+ 加验收项');
+  addAc.onclick=()=>{
+    (req.acceptance=req.acceptance||[]).push({
+      ac_id:'',requirement_id:req.req_id||'',description:'',kind:'automated',verification_command:''
+    });
+    drawForm();
+  };
+  acBox.append(addAc);
+  box.append(acBox);
+  return box;
+}
+
+/* ---------- 第 3 步：任务 ---------- */
+function taskRow(task,ti){
+  const box=el('div','req');
+  const head=el('div','item-head');
+  head.append(el('b',null,(task.task_id||'新任务')+' · '+(task.role||'developer')));
+  const rm=el('button','ghost','删除');
+  rm.onclick=()=>{form.tasks.splice(ti,1);drawForm();};
+  head.append(rm);box.append(head);
+
+  const mk=(label,key,placeholder,help)=>{
+    const i=el('input');i.value=task[key]||'';i.placeholder=placeholder;
+    i.oninput=()=>{task[key]=i.value;};
+    const parts=[el('p','label',label),i];
+    if(help)parts.push(hint(help));
+    return parts;
+  };
+  const list=(label,key,placeholder,help,parse)=>{
+    const i=el('input');i.value=(task[key]||[]).join(', ');i.placeholder=placeholder;
+    i.oninput=()=>{task[key]=parse(i.value);};
+    const parts=[el('p','label',label),i];
+    if(help)parts.push(hint(help));
+    return parts;
+  };
+  const comma=v=>v.split(',').map(s=>s.trim()).filter(Boolean);
+
+  const roleSel=el('select');
+  [['developer','developer · 写代码'],['tester','tester · 写测试'],['reviewer','reviewer · 审查']].forEach(([v,t])=>{
+    const o=el('option',null,t);o.value=v;roleSel.append(o);
+  });
+  roleSel.value=task.role||'developer';
+  roleSel.onchange=()=>{task.role=roleSel.value;drawForm();};
+
+  box.append(...mk('任务编号','task_id','T-1','从 T-1 开始。'),
+             el('p','label','角色'),roleSel,
+             ...mk('这个任务要做什么','objective','例如：实现 add() 并写测试',''),
+             ...list('允许修改哪些文件','allowed_paths','src/a.js, test/a.test.js',
+                    '逗号分隔。写相对路径，越界的改动会被拦下。',comma),
+             ...list('产出哪些文件','deliverables','src/a.js',
+                    '逗号分隔。不改文件的任务填 (none)。',comma),
+             ...list('对应哪些验收项','acceptance_ids','AC-1',
+                    '逗号分隔，必须是第 2 步里存在的编号。',comma),
+             ...list('依赖哪些任务','dependencies','T-0',
+                    '逗号分隔。没有依赖就留空。',comma));
+  return box;
+}
+
+function drawForm(){
+  const rl=$('reqList');rl.replaceChildren();
+  if(!form.requirements.length)rl.append(el('div','empty','还没有需求。点下面的按钮加一条。'));
+  form.requirements.forEach((r,i)=>rl.append(reqRow(r,i)));
+
+  const tf=$('taskForm');tf.replaceChildren();
+  if(!form.tasks.length)tf.append(el('div','empty','还没有任务。点下面的按钮加一个。'));
+  form.tasks.forEach((t,i)=>tf.append(taskRow(t,i)));
+}
+
+$('addReq').onclick=()=>{
+  const n=form.requirements.length+1;
+  form.requirements.push({req_id:'REQ-'+n,statement:'',acceptance:[
+    {ac_id:'AC-'+n,requirement_id:'REQ-'+n,description:'',kind:'automated',verification_command:''}
+  ]});
+  drawForm();
+};
+$('addTask').onclick=()=>{
+  const n=form.tasks.length+1;
+  form.tasks.push({task_id:'T-'+n,role:'developer',objective:'',allowed_paths:[],deliverables:[],acceptance_ids:[],dependencies:[]});
+  drawForm();
+};
+
+/* ---------- 第 4 步：运行 ---------- */
+function renderTasks(s){
+  const list=$('taskList');
+  if(!s.project){list.replaceChildren(el('div','empty','先在第 1 步保存项目。'));return;}
+  const fp=JSON.stringify([s.project.tasks.map(t=>t.task_id),s.running,s.lastRun]);
+  if(list.dataset.fp===fp)return;
+  list.dataset.fp=fp;
+  list.replaceChildren();
+  for(const task of s.project.tasks){
+    const card=el('div','req');
+    const head=el('div','item-head');
+    head.append(el('b',null,stageRole(task.role)+' · '+task.task_id));
+    card.append(head,el('div','mono',task.objective));
+    const btn=el('button','ghost sm','只跑这个任务');
+    btn.style.marginTop='10px';
+    btn.disabled=!!s.running;
+    btn.onclick=()=>runTask(task.task_id);
+    card.append(btn);
+    list.append(card);
+  }
+}
+function stageRole(r){
+  return ({developer:'开发者',tester:'测试',reviewer:'审查'})[r]||r;
+}
+
+function renderRunning(running,lastRun,outputLines){
+  const badge=$('runState');
+  const outBox=$('outputCard');
+  if(running){
+    const shown=running.currentTask&&running.currentTask!==running.taskId
+      ?running.taskId+' › '+running.currentTask
+      :(running.currentTask||running.taskId);
+    badge.textContent='运行中：'+shown+(running.cancelling?'（正在取消）':'');
+    badge.className='badge warn';
+    outBox.hidden=false;
+    $('cancelBtn').disabled=running.cancelling;
+    $('output').textContent=(outputLines||[]).join('').slice(-4000);
+    return;
+  }
+  if(lastRun){
+    badge.textContent=(lastRun.ok?'完成':'失败')+'：'+lastRun.taskId;
+    badge.className='badge'+(lastRun.ok?'':' bad');
+    if(outputLines&&outputLines.length){
+      outBox.hidden=false;
+      $('output').textContent=outputLines.join('').slice(-4000);
+    }
+    return;
+  }
+  badge.textContent='空闲';badge.className='badge';
+}
+
+$('runPlanBtn').onclick=async()=>{
+  const m=$('actionMsg');
+  const r=await fetch('/api/run-plan',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+  const v=await r.json();
+  if(!r.ok){m.className='msg err';m.textContent=translateError(v.error||'启动失败');return;}
+  m.className='msg';m.textContent='已开始，按依赖顺序跑';
+  load();
+};
+async function runTask(taskId){
+  const r=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({taskId})});
+  const v=await r.json();
+  const m=$('actionMsg');
+  if(!r.ok){m.className='msg err';m.textContent=translateError(v.error||'启动失败');return;}
+  m.className='msg';m.textContent='已开始跑 '+taskId;
+  load();
+}
+$('cancelBtn').onclick=async()=>{
+  const m=$('actionMsg');
+  const r=await fetch('/api/cancel',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+  const v=await r.json();
+  if(!r.ok){m.className='msg err';m.textContent=translateError(v.error||'取消失败');return;}
+  m.className='msg';m.textContent='已请求中断，剩下的任务不会再派';
+  load();
+};
+
+/* ---------- 折叠区 ---------- */
+function renderStageMap(s){
+  const map=$('stageMap');if(!map)return;
+  map.replaceChildren();
+  const order=Object.keys(stageNames).filter(k=>k!=='BLOCKED');
+  const idx=order.indexOf(s.stage);
+  order.forEach((name,i)=>{
+    const row=el('div','stage-row');
+    if(i<idx)row.className='stage-row done';
+    else if(i===idx)row.className='stage-row current';
+    if(s.stage==='BLOCKED'&&i===Math.max(idx-1,0))row.className='stage-row blocked';
+    row.append(el('span','stage-idx',String(i+1)));
+    row.append(el('span','stage-name',stageNames[name]));
+    if(i===idx)row.append(el('span','stage-state','当前'));
+    map.append(row);
+    if(i<order.length-1)map.append(el('div','stage-connector'));
+  });
+}
+
+async function load(){
+  const r=await fetch('/api/state');const s=await r.json();
+
+  $('stageHint').textContent=s.stage==='BLOCKED'
+    ?'流水线已阻塞，等你在下面放行。'
+    :'当前阶段：'+stageNames[s.stage]+'（'+s.stage+'）';
+  const badge=$('state');
+  badge.textContent=s.blocked?'已阻塞':'进行中';
+  badge.className='badge'+(s.blocked?' warn':'');
+
+  renderStageMap(s);
+  const gates=$('gates');gates.replaceChildren();
+  for(const g of gateOrder){
+    const on=s.passedGates.includes(g);
+    const label=g+(on?' ✓':'');
+    gates.append(el('span','gate'+(on?' on':''),label));
+  }
+
+  const lastBlocked=[...s.history].reverse().find(h=>h.to==='BLOCKED');
+  lastBlockedFrom=lastBlocked?lastBlocked.from:null;
+  $('releaseBox').hidden=!s.blocked;
+  if(s.blocked&&lastBlockedFrom)$('releaseTo').value=lastBlockedFrom;
+
+  const next=$('nextStages');next.replaceChildren();
+  for(const edge of s.nextStages){
+    if(edge.to==='BLOCKED')continue;
+    const b=el('button','ghost sm',stageNames[edge.to]+(edge.gate?' · '+edge.gate:''));
+    b.onclick=()=>post('/api/advance',{to:edge.to,note:'从面板推进'});
+    if(edge.gate){b.disabled=true;b.title='这一步需要门禁证据，先跑任务';}
+    next.append(b);
+  }
+
+  renderProject(s.project);
+  renderTasks(s);
+  renderRunning(s.running,s.lastRun,s.outputLines);
+
+  $('count').textContent=String(s.history.length);
+  const h=$('history');h.replaceChildren();
+  if(!s.history.length)h.append(el('div','empty','还没有阶段变化。'));
+  const filtered=[...s.history].reverse().filter(rec=>{
+    if(!historyFilterValue)return true;
+    const from=stageNames[rec.from]||rec.from,to=stageNames[rec.to]||rec.to;
+    return (from+' '+to+' '+(rec.gate||'')+' '+(rec.note||'')).toLowerCase().includes(historyFilterValue);
+  });
+  if(!filtered.length)h.append(el('div','empty','没有匹配的记录。'));
+  for(const rec of filtered){
+    const item=el('div','item');
+    const line=el('div');
+    line.append(el('b',null,(stageNames[rec.from]||rec.from)+' → '+(stageNames[rec.to]||rec.to)));
+    if(rec.gate)line.append(el('span','mono','  '+rec.gate+(rec.verdict&&rec.verdict.passed?' 通过':' 未通过')));
+    item.append(line,el('div','mono',new Date(rec.at).toLocaleString()+(rec.note?' · '+rec.note:'')));
+    if(rec.verdict&&!rec.verdict.passed&&rec.verdict.blocking.length){
+      item.append(el('div','mono','拦截：'+rec.verdict.blocking.join('; ')));
+    }
+    h.append(item);
+  }
+
+  $('taskCount').textContent=String(s.tasks.length);
+  const t=$('tasks');t.replaceChildren();
+  if(!s.tasks.length)t.append(el('div','empty','还没有任务记录。'));
+  for(const task of s.tasks){
+    const item=el('div','item');
+    item.append(el('b',null,task.taskId));
+    item.append(el('div','mono',task.files.join(' · ')));
+    if(task.failure){
+      const f=task.failure;
+      item.append(el('div','mono','失败：'+translateFailure(f.reason)+' — '+(f.detail||'')));
+    }
+    t.append(item);
+  }
+}
+function translateFailure(reason){
+  return ({
+    'adapter-error':'子进程出错',
+    'attempts-exhausted':'重试次数用完',
+    'gate-refused':'门禁拒绝',
+    'no-progress':'没有进展',
+    'cancelled':'已取消',
+    'panel-error':'面板出错',
+    'unreadable':'记录损坏',
+  })[reason]||reason;
+}
+
+$('historyFilter').oninput=e=>{historyFilterValue=e.target.value.trim().toLowerCase();};
+
+async function post(route,body){
+  const r=await fetch(route,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const v=await r.json();
+  const m=$('actionMsg');
+  if(!r.ok){
+    m.className='msg err';
+    m.textContent=translateError(v.error||v.refused?.detail||'操作失败');
+    return;
+  }
+  m.className='msg';m.textContent='已记录';
+  load();
+}
+$('releaseBtn').onclick=()=>post('/api/release',{
+  to:$('releaseTo').value.trim(),from:lastBlockedFrom,
+  note:$('releaseNote').value.trim()||'人工放行'
+});
+$('blockBtn').onclick=()=>post('/api/block',{note:$('releaseNote').value.trim()||'人工阻塞'});
+
+/* ---------- 导入导出 ---------- */
+$('exportJson').onclick=()=>{
+  const payload={
+    name:$('pName').value.trim(),repo_path:$('pRepo').value.trim(),
+    model:$('pModel').value.trim(),sandbox:$('pSandbox').value.trim()||'bypass',
+    requirements:form.requirements,tasks:form.tasks,
+  };
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+  const a=el('a');a.href=URL.createObjectURL(blob);a.download='project-config.json';a.click();
+  URL.revokeObjectURL(a.href);
+};
+$('importJson').onclick=()=>{$('importFile').click();};
+$('importFile').onchange=async e=>{
+  const file=e.target.files[0];
+  if(!file)return;
+  const text=await file.text();
+  const m=$('projMsg');
+  try{
+    const data=JSON.parse(text);
+    if(data.name)$('pName').value=data.name;
+    if(data.repo_path)$('pRepo').value=data.repo_path;
+    if(data.model)$('pModel').value=data.model;
+    if(data.sandbox)$('pSandbox').value=data.sandbox;
+    form.requirements=JSON.parse(JSON.stringify(data.requirements||[]));
+    form.tasks=JSON.parse(JSON.stringify(data.tasks||[]));
+    projectLoaded=false;drawForm();
+    m.className='msg';m.textContent='已导入，检查后点保存';
+  }catch(err){
+    m.className='msg err';m.textContent='导入失败：'+err.message;
+  }
+  e.target.value='';
+};
+
+drawForm();
+load();
+setInterval(load,3000);

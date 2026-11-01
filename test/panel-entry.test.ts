@@ -129,7 +129,12 @@ test("tools/panel.mjs serves a working panel and prints the real port", async ()
     assert.equal(response.status, 200);
     const body = await response.text();
     assert.match(body, /流水线控制台/);
-    assert.match(body, /AGENT ORCHESTRATOR/);
+    // The panel is a four-step guide in Chinese; the old English banner is gone.
+    assert.match(body, /选一个项目/);
+    assert.match(body, /说清要做什么/);
+    assert.match(body, /拆成几个任务/);
+    assert.match(body, /跑起来/);
+    assert.doesNotMatch(body, /AGENT ORCHESTRATOR/);
 
     const state = (await (await fetch(`${base}api/state`)).json()) as {
       stage: string;
