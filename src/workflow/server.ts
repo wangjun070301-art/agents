@@ -464,16 +464,31 @@ function buildAdapterFor(
 ): WorkflowAdapter {
   const bindings = readBindings(stateDir);
   const agent = agentForRole(bindings, task.role);
+  // A per-role model, when one was chosen for this role's agent.
+  const chosenModel = (bindings as Record<string, unknown>)[`${task.role}_model`];
+  const model = typeof chosenModel === "string" && chosenModel ? chosenModel : undefined;
 
   if (agent === "claude") {
-    const binary = detectAgents().find((a) => a.id === "claude")?.binary;
+    const claudeInfo = detectAgents().find((a) => a.id === "claude");
+    const binary = claudeInfo?.binary;
     if (!binary) {
       throw new Error("角色 " + task.role + " 绑定了 Claude Code，但这台机器上找不到 claude 命令");
     }
     return new ClaudeAdapter({
       claudePath: binary,
       repoPath: task.repo_path,
-      model: project.model,
+      // A Claude Code run needs one of the names in its built-in list; the
+      // relay maps it onto whatever model the gateway actually serves.
+      model: model ?? "claude-sonnet-4-5",
+      ...(claudeInfo?.route?.kind === "gateway"
+        ? {
+            gateway: {
+              baseUrl: claudeInfo.route.baseUrl,
+              ...(claudeInfo.route.apiKey ? { apiKey: claudeInfo.route.apiKey } : {}),
+              modelMap: claudeInfo.route.modelMap,
+            },
+          }
+        : {}),
       ...(onOutput ? { onOutput } : {}),
     });
   }
@@ -1008,35 +1023,69 @@ function renderAgents(s){
     row.append(el('span',a.available?'dot-ok':'dot-off'));
     row.append(el('span','name',a.label));
     if(a.version)row.append(el('span','ver',a.version));
-    if(!a.available)row.append(el('span','why',a.reason));
+    if(!a.available){
+      row.append(el('span','why',a.reason));
+    }else if(a.route&&a.route.kind==='gateway'){
+      // Say which relay is used: the user should know a local hop exists.
+      row.append(el('span','ver','经 '+a.route.baseUrl.replace(/^http:\/\//,'')+' 转接'));
+    }
     list.append(row);
   }
 
   const grid=$('roleGrid');
   if(!agentsLoaded){
     roleDraft={...(s.bindings||{})};
-    grid.replaceChildren();
-    for(const role of Object.keys(roleNames)){
-      const row=el('div','role-row');
-      row.append(el('span','rname',roleNames[role]));
-      const sel=el('select');
-      const def=el('option',null,'默认（Codex）');def.value='';sel.append(def);
-      for(const a of s.agents){
-        // Only usable agents are selectable. An unavailable one still appears,
-        // so the reason stays visible, but it cannot be chosen.
-        const o=el('option',null,a.label+(a.available?'':'（不可用）'));
-        o.value=a.id;
-        o.disabled=!a.available;
-        sel.append(o);
-      }
-      sel.value=roleDraft[role]||'';
-      sel.onchange=()=>{
-        if(sel.value)roleDraft[role]=sel.value;else delete roleDraft[role];
-      };
-      row.append(sel);
-      grid.append(row);
-    }
+    drawRoles(s);
     agentsLoaded=true;
+  }
+}
+
+/** One row per role: which agent, and which of that agent's models. */
+function drawRoles(s){
+  const grid=$('roleGrid');
+  grid.replaceChildren();
+  for(const role of Object.keys(roleNames)){
+    const row=el('div','role-row');
+    row.append(el('span','rname',roleNames[role]));
+
+    const sel=el('select');
+    const def=el('option',null,'默认（Codex）');def.value='';sel.append(def);
+    for(const a of s.agents){
+      // Only usable agents are selectable. An unavailable one still appears,
+      // so the reason stays visible, but it cannot be chosen.
+      const o=el('option',null,a.label+(a.available?'':'（不可用）'));
+      o.value=a.id;
+      o.disabled=!a.available;
+      sel.append(o);
+    }
+    sel.value=roleDraft[role]||'';
+
+    /**
+     * A per-role model choice. Only agents that advertise models get one,
+     * because a model name means nothing for an agent that does not accept
+     * one. The value travels with the binding.
+     */
+    const modelSel=el('select');
+    const defModel=el('option',null,'默认模型');defModel.value='';modelSel.append(defModel);
+    const agentInfo=s.agents.find(a=>a.id===(sel.value||'codex'));
+    for(const m of (agentInfo&&agentInfo.models)||[]){
+      const o=el('option',null,m);o.value=m;modelSel.append(o);
+    }
+    modelSel.value=roleDraft[role+'_model']||'';
+    modelSel.disabled=!(agentInfo&&agentInfo.models&&agentInfo.models.length);
+    modelSel.onchange=()=>{
+      if(modelSel.value)roleDraft[role+'_model']=modelSel.value;
+      else delete roleDraft[role+'_model'];
+    };
+
+    sel.onchange=()=>{
+      if(sel.value)roleDraft[role]=sel.value;else delete roleDraft[role];
+      // A model only makes sense for the agent it belongs to.
+      delete roleDraft[role+'_model'];
+      drawRoles(s);
+    };
+    row.append(sel,modelSel);
+    grid.append(row);
   }
 }
 

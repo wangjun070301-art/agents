@@ -27,6 +27,15 @@ export interface ClaudeAdapterOptions {
   model?: string;
   timeoutMs?: number;
   onOutput?: (chunk: string) => void;
+  /**
+   * A local relay to route through, when the agent's own settings cannot reach
+   * a model. The relay maps Claude's model names onto the gateway's.
+   */
+  gateway?: {
+    baseUrl: string;
+    apiKey?: string;
+    modelMap: Array<{ from: string; to: string }>;
+  };
 }
 
 export class ClaudeAdapterError extends Error {
@@ -45,6 +54,7 @@ export class ClaudeAdapter implements WorkflowAdapter {
   readonly label = "Claude Code";
   private readonly sessions = new Map<string, TaskEnvelope>();
   private readonly evidence = new Map<string, EvidenceBundle>();
+  private proxy?: { baseUrl: string; close: () => Promise<void> };
 
   constructor(private readonly options: ClaudeAdapterOptions) {}
 
@@ -64,8 +74,12 @@ export class ClaudeAdapter implements WorkflowAdapter {
       return { ...base, detail: `找不到 claude 可执行文件：${this.options.claudePath}` };
     }
 
-    const blocked = this.gatewayModelProblem();
-    if (blocked) return { ...base, detail: blocked };
+    // With a gateway route the model-name problem is handled by the relay, so
+    // the check only needs to confirm the binary exists.
+    if (!this.options.gateway) {
+      const blocked = this.gatewayModelProblem();
+      if (blocked) return { ...base, detail: blocked };
+    }
 
     return {
       ...base,
@@ -124,15 +138,67 @@ export class ClaudeAdapter implements WorkflowAdapter {
   }
 
   private run(envelope: TaskEnvelope, options?: ExecuteOptions): Promise<TaskResult> {
-    const prompt = `${renderTaskPrompt(envelope)}\n\nReturn the JSON object described above and nothing else.`;
-    const args = ["-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"];
-    if (this.options.model) args.push("--model", this.options.model);
+    return this.withProxy(async (baseUrl) => {
+      const prompt = `${renderTaskPrompt(envelope)}\n\nReturn the JSON object described above and nothing else.`;
+      const args = ["-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"];
+      if (this.options.model) args.push("--model", this.options.model);
+
+      /**
+       * A private config directory is used when routing through the relay.
+       * Claude Code merges `~/.claude/settings.json` over anything passed on
+       * the command line, so the user's stale model names would win otherwise.
+       */
+      let env = { ...process.env };
+      if (baseUrl && this.options.gateway) {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-cfg-"));
+        const model = this.options.model ?? "claude-sonnet-4-5";
+        fs.writeFileSync(
+          path.join(dir, "settings.json"),
+          JSON.stringify({
+            env: {
+              ANTHROPIC_BASE_URL: baseUrl,
+              ...(this.options.gateway.apiKey
+                ? { ANTHROPIC_AUTH_TOKEN: this.options.gateway.apiKey }
+                : {}),
+              ANTHROPIC_DEFAULT_SONNET_MODEL: model,
+              ANTHROPIC_DEFAULT_OPUS_MODEL: model,
+              ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
+            },
+          }),
+          "utf8",
+        );
+        fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ primaryApiKey: "any" }), "utf8");
+        env = { ...env, CLAUDE_CONFIG_DIR: dir };
+      }
+
+      return this.spawnClaude(args, envelope, options, env);
+    });
+  }
+
+  /** Start the relay for one run, and stop it when the run ends. */
+  private async withProxy<T>(fn: (baseUrl: string | undefined) => Promise<T>): Promise<T> {
+    if (!this.options.gateway) return fn(undefined);
+    const { startClaudeProxy } = await import("../claude-proxy.js");
+    const proxy = await startClaudeProxy(this.options.gateway.baseUrl, this.options.gateway.modelMap);
+    try {
+      return await fn(proxy.baseUrl);
+    } finally {
+      await proxy.close();
+    }
+  }
+
+  private spawnClaude(
+    args: string[],
+    envelope: TaskEnvelope,
+    options: ExecuteOptions | undefined,
+    env: NodeJS.ProcessEnv,
+  ): Promise<TaskResult> {
 
     return new Promise<TaskResult>((resolve, reject) => {
       const child = spawn(this.options.claudePath, args, {
         cwd: envelope.repo_path,
         windowsHide: true,
-        env: { ...process.env },
+        env,
       });
       let stdout = "";
       let timedOut = false;
